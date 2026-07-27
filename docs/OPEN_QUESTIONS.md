@@ -22,7 +22,7 @@ Resolve these questions with official documentation, focused code spikes, measur
 - Is a non-GPU fallback necessary after hardware testing?
 - How do `winit`, `wgpu`, and `egui` behave across resize, sleep/wake, HDR, mixed-DPI monitors, and fullscreen changes?
 - Should fullscreen target the current monitor or a user-selected monitor in v0.1?
-- What frame-rate and power limits should be user-adjustable?
+- Do Display, 60 FPS, and 30 FPS remain the right choices after representative GPU board-power, thermal, and battery measurements?
 
 ## Presets and native plugins
 
@@ -84,4 +84,5 @@ Resolve these questions with official documentation, focused code spikes, measur
 - The installed AMD GPU was not enumerated by wgpu during a forced-adapter check. Windows PnP reports that adapter as `CM_PROB_DISABLED` (Code 22), explaining why application-level selection cannot use it; integrated-GPU rendering remains unvalidated.
 - Smoothed application-frame telemetry measured the NVIDIA GeForce RTX 5070 Ti at about 168–170 FPS and 5.9–6.0 ms per frame for the WGSL visual in windowed and 3440×1440 fullscreen modes. This measures UI cadence, not monitor scanout or playback-to-photon latency.
 - Microsoft Basic Render Driver rendered Feedback Tunnel with live audio, but measured only about 9–10 FPS windowed and about 3 FPS at 3440×1440 fullscreen. This proves a software-adapter compatibility path, not acceptable minimum performance.
+- The player now offers Display, 60 FPS, and 30 FPS pacing beside measured cadence. In one quiet extracted-release comparison, limiting a ~167 FPS Feedback Tunnel reduced process CPU use from 28.1% of one core to 6.7% at both 60 and 30 FPS; GPU board power, thermals, and battery impact remain unmeasured.
 - The current host exposes one active 3440×1440 HP X34 at 96 DPI, so mixed-DPI and multi-monitor validation requires another environment.

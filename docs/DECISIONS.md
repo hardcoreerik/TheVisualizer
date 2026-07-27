@@ -93,3 +93,9 @@ These are project decisions, not verified implementation results. Supersede deci
 **Decision:** License TheVisualizer's original code, documentation, bundled WGSL presets, plugin SDK, and example plugin under Apache-2.0. Do not import or bundle MilkDrop/projectM code, community presets, or textures without an artifact-level license and provenance record.
 
 **Rationale:** Apache-2.0 is a permissive open-source license with an explicit patent grant. The current implementation is original and its resolved Rust dependencies declare compatible license choices. projectM's core is LGPL-2.1-or-later, while major community preset collections acknowledge that most authors supplied no explicit license; neither should silently determine the license of this repository.
+
+## D-016 — Explicit frame pacing
+
+**Decision:** Follow the presentation cadence by default and offer optional 60 FPS and 30 FPS host-side limits in the technical disclosure.
+
+**Rationale:** High-refresh displays preserve maximum fluidity by default, while explicit lower limits give users a direct cadence/CPU tradeoff without changing capture, analysis, preset, or plugin contracts. Measured application cadence remains visible; process CPU measurements do not substitute for later GPU board-power, thermal, or battery validation.

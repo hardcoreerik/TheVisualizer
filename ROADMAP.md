@@ -37,6 +37,7 @@ Windows loopback and microphone enumeration/selection, automatic default-device 
 - Implement one host-owned render loop and compact overlay.
 - Add oscilloscope/neon trails, spectrum/particles, and feedback-tunnel visuals.
 - Support preset switching and windowed, borderless, and fullscreen modes.
+- Offer Display, 60 FPS, and 30 FPS pacing with visible measured cadence.
 - Keep audio capture alive through normal resize and presentation-mode changes.
 
 ## Milestone 4 — Presets and native plugins

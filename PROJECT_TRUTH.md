@@ -65,12 +65,13 @@ This document records verified project state. Planned behavior belongs in the [R
 - Progressive overlay disclosure: source, preset, response, visual, levels, presentation, and status remain immediate, while capture format, GPU identity, native-plugin review, latency, and frame telemetry begin collapsed under `DETAILS` or `DETAILS & EXTENSIONS`. Errors remain immediate.
 - `WAITING`, `LIVE`, `SILENT`, and `ERROR` status presentation with source-specific next-step guidance for waiting and silence. Capture replacement clears prior features and visual history before the new source reports data.
 - A repository-owned SVG waveform mark, derived PNG, and embedded native application/window icon. The running app does not depend on an external icon file.
-- Sixteen focused automated tests across the workspace covering analysis, callback-sequence gating, quiet-state guidance, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, presentation, presets, the WGSL scalar and waveform/spectrum buffer contract, strict plugin manifests, changed-artifact rejection, ABI sizes, and the example-plugin lifecycle.
+- Display-synchronized, 60 FPS, and 30 FPS host-side frame pacing selectable beside the measured application cadence in the details disclosure.
+- Seventeen focused automated tests across the workspace covering analysis, callback-sequence gating, quiet-state guidance, frame pacing, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, presentation, presets, the WGSL scalar and waveform/spectrum buffer contract, strict plugin manifests, changed-artifact rejection, ABI sizes, and the example-plugin lifecycle.
 
 ## Runtime-observed results
 
 - `cargo check --workspace` completed successfully on 2026-07-27.
-- `cargo test --workspace` passed 16 tests with 0 failures on 2026-07-27.
+- `cargo test --workspace` passed 17 tests with 0 failures on 2026-07-27.
 - `cargo clippy --workspace -- -D warnings` completed successfully on 2026-07-27.
 - After the same-ID recovery change, the rebuilt debug application opened automatic system capture and local Windows system sounds produced `LIVE`, nonzero RMS/peak values, and visible neon trails.
 - The debug application launched and rendered at 1280×720 on the Windows development host.
@@ -92,6 +93,8 @@ This document records verified project state. Planned behavior belongs in the [R
 - A forced AMD adapter check did not launch: wgpu enumerated NVIDIA adapters and Microsoft Basic Render Driver, but no AMD adapter. Windows PnP then identified the AMD adapter as disabled with `CM_PROB_DISABLED`, so AMD rendering cannot be validated without a deliberate system-level enablement outside TheVisualizer.
 - With `THEVISUALIZER_GPU=Microsoft Basic Render Driver`, the application launched and reported that software adapter in the overlay. Feedback Tunnel rendered in windowed and 3440×1440 fullscreen modes; local Windows system sounds produced `LIVE` with nonzero RMS/peak values. A transition sample showed feature-age peak telemetry of 61.2 ms. Smoothed application cadence measured about 9–10 FPS at roughly 102–109 ms per frame windowed and about 3 FPS at roughly 396 ms per frame fullscreen, so this proves compatibility rather than a usable performance floor.
 - On the NVIDIA GeForce RTX 5070 Ti and active 3440×1440 165 Hz HP X34, the debug player reported about 162–172 application UI frames per second windowed. The WGSL Feedback Tunnel held about 168–169 FPS windowed and about 168–170 FPS fullscreen, at roughly 5.9–6.0 ms per application frame. These are application-cadence observations, not proof of monitor scanout rate or playback-to-photon latency.
+- In the fresh extracted release at 1280×720 with quiet Feedback Tunnel, Display pacing measured about 167 FPS and used 28.1% of one CPU core over ten seconds. The 60 FPS choice settled near 59 FPS and used 6.7%; the 30 FPS choice settled near 30 FPS and also used 6.7% in separate ten-second samples. These are process-CPU observations on one host, not GPU board-power measurements.
+- At the 30 FPS setting, bounded Windows system sounds still produced `LIVE`, approximately 0.046 RMS / 0.107 peak, low-single-digit-millisecond feature age, and visibly reactive Feedback Tunnel rendering.
 - The device menu enumerated four output endpoints and two microphone endpoints on the development host.
 - The non-default HP X34 output opened at 48,000 Hz stereo, and the non-default Steam Streaming Microphone opened at 44,100 Hz mono.
 - Refreshing the device inventory preserved the active capture. The System shortcut then returned to the default speakers, where local system sounds produced `LIVE` state and nonzero RMS/peak values.
@@ -111,7 +114,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - Selecting `Approve & Load` initialized the example plugin. Live system audio changed its bounded response multiplier while the host-owned Feedback Tunnel continued rendering.
 - Selecting `Unload` returned the plugin to `DISABLED`; the example lifecycle test independently verified that processing fails before initialization and after shutdown.
 - Restarting TheVisualizer returned the example plugin to `DISABLED`, confirming that approval is session-only.
-- `scripts\package-windows.ps1` completed successfully with the target-specific license collector and `cargo build --workspace --locked --release`. After embedding the application mark, it created a 7,360,915-byte local-test ZIP with SHA-256 `F2E58DECB8A80EF7ABE26996469F63AE66D98499C24397EF87B5442232D95BCB`.
+- `scripts\package-windows.ps1` completed successfully with the target-specific license collector and `cargo build --workspace --locked --release`. After adding frame pacing, it created a 7,354,697-byte local-test ZIP with SHA-256 `36F34715C576B3A570041887C3A1AD3E21AB8C8FD8D1F79C42A5697BDAB59565`.
 - The rebuilt package launched from its staged directory, discovered the package-relative presets and example plugin, compiled the richer Feedback Tunnel shader, and rendered it at about 165 FPS in a quiet windowed observation on the NVIDIA adapter.
 - The package's third-party bundle contained 205 resolved package entries and 384 non-empty license or notice files. Every resolved package had one summary entry.
 - A second independent collector run produced the same aggregate path-and-content digest as the staged bundle.

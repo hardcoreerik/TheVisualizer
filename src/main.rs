@@ -163,6 +163,35 @@ impl PresentationMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameLimit {
+    Display,
+    Fps60,
+    Fps30,
+}
+
+impl FrameLimit {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Display => "Display",
+            Self::Fps60 => "60",
+            Self::Fps30 => "30",
+        }
+    }
+
+    fn interval(self) -> Option<Duration> {
+        match self {
+            Self::Display => None,
+            Self::Fps60 => Some(Duration::from_secs_f64(1.0 / 60.0)),
+            Self::Fps30 => Some(Duration::from_secs_f64(1.0 / 30.0)),
+        }
+    }
+}
+
+fn pacing_delay(limit: FrameLimit, elapsed: Duration) -> Option<Duration> {
+    limit.interval()?.checked_sub(elapsed)
+}
+
 fn main() -> eframe::Result {
     let icon =
         eframe::icon_data::from_png_bytes(include_bytes!("../assets/thevisualizer-icon.png"))
@@ -228,6 +257,8 @@ struct VisualizerApp {
     visual: usize,
     overlay: bool,
     presentation: PresentationMode,
+    frame_limit: FrameLimit,
+    last_paced_frame: Instant,
     gain: f32,
     started: Instant,
     presets: Vec<Preset>,
@@ -312,6 +343,8 @@ impl VisualizerApp {
             visual: 0,
             overlay: true,
             presentation: PresentationMode::Windowed,
+            frame_limit: FrameLimit::Display,
+            last_paced_frame: started,
             gain,
             started,
             presets: discovery.presets,
@@ -571,6 +604,13 @@ impl VisualizerApp {
                 self.plugin_error = Some(error);
             }
         }
+    }
+
+    fn pace_frame(&mut self) {
+        if let Some(delay) = pacing_delay(self.frame_limit, self.last_paced_frame.elapsed()) {
+            std::thread::sleep(delay);
+        }
+        self.last_paced_frame = Instant::now();
     }
 
     fn set_presentation(&mut self, ctx: &egui::Context, mode: PresentationMode) {
@@ -1180,23 +1220,48 @@ impl VisualizerApp {
                                      compositor/display scanout, and the separate FFT window duration.",
                                 );
                             }
-                            if self.frame_stats.observations > 0 {
+                            ui.horizontal(|ui| {
                                 ui.label(
-                                    egui::RichText::new(format!(
-                                        "FRAME ~{:.0} FPS · {:.1} ms",
-                                        self.frame_stats.fps(),
-                                        self.frame_stats.smoothed_ms
-                                    ))
-                                    .small()
-                                    .monospace()
-                                    .color(Color32::from_rgb(145, 155, 205)),
-                                )
-                                .on_hover_text(
-                                    "Smoothed interval between application UI frames. This measures \
-                                     application cadence, not monitor refresh, display scanout, or \
-                                     playback-to-photon latency.",
+                                    egui::RichText::new("PACE")
+                                        .small()
+                                        .color(Color32::from_rgb(125, 145, 175)),
                                 );
-                            }
+                                for limit in
+                                    [FrameLimit::Display, FrameLimit::Fps60, FrameLimit::Fps30]
+                                {
+                                    if ui
+                                        .selectable_label(
+                                            self.frame_limit == limit,
+                                            limit.label(),
+                                        )
+                                        .on_hover_text(
+                                            "Display follows the presentation cadence; 60 and 30 \
+                                             reduce rendering work with a host-side frame limit.",
+                                        )
+                                        .clicked()
+                                    {
+                                        self.frame_limit = limit;
+                                    }
+                                }
+                                if self.frame_stats.observations > 0 {
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "~{:.0} FPS · {:.1} ms",
+                                            self.frame_stats.fps(),
+                                            self.frame_stats.smoothed_ms
+                                        ))
+                                        .small()
+                                        .monospace()
+                                        .color(Color32::from_rgb(145, 155, 205)),
+                                    )
+                                    .on_hover_text(
+                                        "Smoothed interval between application UI frames. This \
+                                         measures application cadence, not monitor refresh, display \
+                                         scanout, or playback-to-photon latency.",
+                                    );
+                                }
+                            });
                             if let Some(timing) = &self.default_switch_timing {
                                 let first_callback = timing.first_callback_ms.map_or_else(
                                     || "waiting".to_owned(),
@@ -1337,12 +1402,17 @@ impl VisualizerApp {
 
 impl eframe::App for VisualizerApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.pace_frame();
         self.frame_stats.observe(Instant::now());
         self.keyboard(ctx);
         self.update_default_device();
         self.update_features();
         self.update_plugin();
-        ctx.request_repaint_after(Duration::from_millis(16));
+        ctx.request_repaint_after(
+            self.frame_limit
+                .interval()
+                .unwrap_or(Duration::from_millis(16)),
+        );
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1446,8 +1516,9 @@ fn resource_directory(environment: &str, folder: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultSwitchTiming, Features, FrameStats, LatencyStats, PresentationMode, SourceKind,
-        VisualHistory, callback_is_new, default_needs_recovery, status_hint,
+        DefaultSwitchTiming, Features, FrameLimit, FrameStats, LatencyStats, PresentationMode,
+        SourceKind, VisualHistory, callback_is_new, default_needs_recovery, pacing_delay,
+        status_hint,
     };
     use std::time::{Duration, Instant};
 
@@ -1481,6 +1552,22 @@ mod tests {
         );
         assert_eq!(status_hint("LIVE", Some(SourceKind::System)), None);
         assert!(status_hint("ERROR", None).is_some());
+    }
+
+    #[test]
+    fn frame_pacing_waits_only_for_limited_modes() {
+        assert_eq!(
+            pacing_delay(FrameLimit::Fps60, Duration::from_millis(10)),
+            Some(Duration::from_secs_f64(1.0 / 60.0) - Duration::from_millis(10))
+        );
+        assert_eq!(
+            pacing_delay(FrameLimit::Fps30, Duration::from_millis(40)),
+            None
+        );
+        assert_eq!(
+            pacing_delay(FrameLimit::Display, Duration::from_millis(1)),
+            None
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
 - A repository-owned waveform mark embedded as the native application/window icon
+- Display-synchronized, 60 FPS, and 30 FPS pacing choices with measured application cadence
 - Windowed, borderless, and fullscreen presentation
 
 ## Run locally
