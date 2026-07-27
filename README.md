@@ -38,7 +38,7 @@ cargo build --workspace
 cargo run -p thevisualizer
 ```
 
-The workspace build also produces the example native-plugin DLL. The prototype starts in automatic mode on the default Windows output device and follows later default changes. Choosing a specific endpoint from the device menu pins it until `S` returns to automatic system output or `M` returns to automatic microphone input. Refresh rescans devices, left/right or numbered controls switch visual directions, up/down switches GPU presets, `B` toggles borderless presentation, `F11` toggles fullscreen, and `Tab` hides the overlay. `Escape` returns to windowed mode before closing the app.
+The workspace build also produces the example native-plugin DLL. The prototype starts in automatic mode on the default Windows output device and follows later default changes. Choosing a specific endpoint from the device menu pins it until `S` returns to automatic system output or `M` returns to automatic microphone input. Refresh rescans devices, Left/Right cycles visual directions, `1`/`2`/`3` selects one directly, Up/Down switches GPU presets, `B` toggles borderless presentation, `F11` toggles fullscreen, and `Tab` hides the overlay. `Escape` returns to windowed mode before closing the app.
 
 To create the portable local-test Windows archive:
 

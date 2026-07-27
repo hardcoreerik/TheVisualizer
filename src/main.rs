@@ -19,7 +19,7 @@ use preset::Preset;
 use render::{GpuPresetRenderer, PresetFrame};
 
 const VISUAL_NAMES: [&str; 3] = ["NEON SCOPE", "PARTICLE ARRAY", "GPU PRESET"];
-const VISUAL_BUTTONS: [&str; 3] = ["Scope", "Particles", "Preset"];
+const VISUAL_BUTTONS: [&str; 3] = ["1 Scope", "2 Particles", "3 Preset"];
 const DEFAULT_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const VISUAL_TRAIL_FRAMES: usize = 10;
 
@@ -190,6 +190,15 @@ impl FrameLimit {
 
 fn pacing_delay(limit: FrameLimit, elapsed: Duration) -> Option<Duration> {
     limit.interval()?.checked_sub(elapsed)
+}
+
+fn visual_index_for_key(key: egui::Key) -> Option<usize> {
+    match key {
+        egui::Key::Num1 => Some(0),
+        egui::Key::Num2 => Some(1),
+        egui::Key::Num3 => Some(2),
+        _ => None,
+    }
 }
 
 fn main() -> eframe::Result {
@@ -682,8 +691,17 @@ impl VisualizerApp {
                     input.key_pressed(egui::Key::S),
                 )
             });
+        let direct_visual = ctx.input(|input| {
+            [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3]
+                .into_iter()
+                .find(|key| input.key_pressed(*key))
+                .and_then(visual_index_for_key)
+        });
         if tab {
             self.overlay = !self.overlay;
+        }
+        if let Some(visual) = direct_visual {
+            self.visual = visual;
         }
         if left {
             self.visual = (self.visual + VISUAL_NAMES.len() - 1) % VISUAL_NAMES.len();
@@ -1215,7 +1233,7 @@ impl VisualizerApp {
                                     .color(Color32::from_rgb(110, 180, 175)),
                                 )
                                 .on_hover_text(
-                                    "Estimated newest captured sample → feature update. Includes the \
+                                    "Estimated newest captured sample to feature update. Includes the \
                                      audio backend and UI handoff; excludes upstream playback buffering, \
                                      compositor/display scanout, and the separate FFT window duration.",
                                 );
@@ -1269,7 +1287,7 @@ impl VisualizerApp {
                                 );
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "DEFAULT DETECT → OPEN {:.1} ms · FIRST PACKET {}",
+                                        "DEFAULT DETECT TO OPEN {:.1} ms · FIRST PACKET {}",
                                         timing.reopen_ms, first_callback
                                     ))
                                     .small()
@@ -1285,10 +1303,15 @@ impl VisualizerApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "←/→ visual · ↑/↓ preset · B borderless · F11 fullscreen · Tab hide · Esc back/exit",
+                                "<-/-> visual · Up/Down preset · B borderless · F11 fullscreen · Tab · Esc",
                             )
                             .small()
                             .color(Color32::from_rgb(110, 130, 150)),
+                        )
+                        .on_hover_text(
+                            "Left/Right cycles visuals; 1/2/3 selects one directly; Up/Down changes \
+                             GPU presets; Tab hides the overlay; Escape returns to windowed mode \
+                             before exiting.",
                         );
                     });
             });
@@ -1518,7 +1541,7 @@ mod tests {
     use super::{
         DefaultSwitchTiming, Features, FrameLimit, FrameStats, LatencyStats, PresentationMode,
         SourceKind, VisualHistory, callback_is_new, default_needs_recovery, pacing_delay,
-        status_hint,
+        status_hint, visual_index_for_key,
     };
     use std::time::{Duration, Instant};
 
@@ -1568,6 +1591,14 @@ mod tests {
             pacing_delay(FrameLimit::Display, Duration::from_millis(1)),
             None
         );
+    }
+
+    #[test]
+    fn number_keys_select_each_visual_directly() {
+        assert_eq!(visual_index_for_key(eframe::egui::Key::Num1), Some(0));
+        assert_eq!(visual_index_for_key(eframe::egui::Key::Num2), Some(1));
+        assert_eq!(visual_index_for_key(eframe::egui::Key::Num3), Some(2));
+        assert_eq!(visual_index_for_key(eframe::egui::Key::Num4), None);
     }
 
     #[test]
