@@ -15,7 +15,6 @@ Resolve these questions with official documentation, focused code spikes, measur
 - What sample-block size, FFT size, overlap, window function, and smoothing produce stable visuals at acceptable latency?
 - How should low, mid, and high bands scale across sample rates?
 - Which beat or onset feature, if any, earns a place beyond the v0.1 energy inputs?
-- What is the bounded snapshot handoff when capture and render rates diverge?
 
 ## Rendering and player
 
@@ -80,6 +79,7 @@ Resolve these questions with official documentation, focused code spikes, measur
 - Native-plugin approval is session-only and tied to the full SHA-256 digest; discovery and restart leave the example disabled, and approval is explicitly not a signature or sandbox.
 - Windows x86_64 local testing uses one portable ZIP with package-relative plugin paths and SHA-256 checksums; a fresh-directory smoke test passed on the development host.
 - CPAL/WASAPI capture timestamps now drive newest-sample-to-feature telemetry. Short 48,000 Hz runs on the first host showed low-single-digit-millisecond averages while the separate 2,048-sample FFT window measured 42.7 ms; external playback-to-display latency remains unresolved.
+- The UI snapshots the latest bounded sample buffer and analyzes only when the capture callback sequence advances. Slow rendering may coalesce intermediate callbacks; faster rendering reuses the latest immutable feature set instead of rerunning the FFT on stale samples. Capture replacement resets the gate.
 - TheVisualizer's original code, documentation, bundled presets, plugin SDK, and example plugin use Apache-2.0. No MilkDrop/projectM code or community presets are included. Future third-party visual content requires explicit per-artifact provenance; unlabeled community presets are not assumed to be public domain.
 - The installed AMD GPU was not enumerated by wgpu during a forced-adapter check. Windows PnP reports that adapter as `CM_PROB_DISABLED` (Code 22), explaining why application-level selection cannot use it; integrated-GPU rendering remains unvalidated.
 - Smoothed application-frame telemetry measured the NVIDIA GeForce RTX 5070 Ti at about 168–170 FPS and 5.9–6.0 ms per frame for the WGSL visual in windowed and 3440×1440 fullscreen modes. This measures UI cadence, not monitor scanout or playback-to-photon latency.

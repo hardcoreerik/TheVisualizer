@@ -214,6 +214,7 @@ struct VisualizerApp {
     devices: Vec<AudioDevice>,
     device_error: Option<String>,
     analyzer: Analyzer,
+    last_analyzed_callback_sequence: u64,
     features: Features,
     visual_history: VisualHistory,
     latency: LatencyStats,
@@ -297,6 +298,7 @@ impl VisualizerApp {
             devices: Vec::new(),
             device_error: None,
             analyzer: Analyzer::new(),
+            last_analyzed_callback_sequence: 0,
             features: Features::default(),
             visual_history: VisualHistory::default(),
             latency: LatencyStats::default(),
@@ -332,6 +334,7 @@ impl VisualizerApp {
                 }
                 self.latency = LatencyStats::default();
                 self.visual_history = VisualHistory::default();
+                self.last_analyzed_callback_sequence = 0;
                 self.capture = Some(capture);
                 self.capture_error = None;
                 true
@@ -438,6 +441,12 @@ impl VisualizerApp {
             Ok(samples) => samples.snapshot(FFT_SIZE),
             Err(_) => return,
         };
+        if !callback_is_new(
+            &mut self.last_analyzed_callback_sequence,
+            snapshot.callback_sequence,
+        ) {
+            return;
+        }
         self.features = self.analyzer.analyze(&snapshot.samples, sample_rate);
         self.visual_history
             .update(snapshot.callback_sequence, &self.features);
@@ -1375,6 +1384,15 @@ fn default_needs_recovery<T: Eq>(
     follow && (capture_failed || active != Some(current_default))
 }
 
+fn callback_is_new(last: &mut u64, current: u64) -> bool {
+    if current == 0 || current == *last {
+        false
+    } else {
+        *last = current;
+        true
+    }
+}
+
 fn preset_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PRESETS", "presets")
 }
@@ -1401,7 +1419,7 @@ fn resource_directory(environment: &str, folder: &str) -> PathBuf {
 mod tests {
     use super::{
         DefaultSwitchTiming, Features, FrameStats, LatencyStats, PresentationMode, VisualHistory,
-        default_needs_recovery,
+        callback_is_new, default_needs_recovery,
     };
     use std::time::{Duration, Instant};
 
@@ -1412,6 +1430,15 @@ mod tests {
         assert!(default_needs_recovery(true, Some(&"same"), &"same", true));
         assert!(default_needs_recovery(true, Some(&"old"), &"new", false));
         assert!(default_needs_recovery(true, None, &"new", false));
+    }
+
+    #[test]
+    fn analysis_runs_once_per_audio_callback() {
+        let mut last = 0;
+        assert!(!callback_is_new(&mut last, 0));
+        assert!(callback_is_new(&mut last, 1));
+        assert!(!callback_is_new(&mut last, 1));
+        assert!(callback_is_new(&mut last, 2));
     }
 
     #[test]
