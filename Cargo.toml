@@ -1,0 +1,21 @@
+[workspace]
+members = ["plugin-sdk", "plugins/example"]
+default-members = [".", "plugins/example"]
+resolver = "3"
+
+[package]
+name = "thevisualizer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+bytemuck = "1.25.0"
+cpal = "0.18.1"
+eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+libloading = "0.8.9"
+pollster = "0.4.0"
+rustfft = "6.4.1"
+sha2 = "0.10.9"
+thevisualizer-plugin-sdk = { path = "plugin-sdk" }

@@ -1,0 +1,81 @@
+# TheVisualizer
+
+TheVisualizer is a standalone, modern-retro visualization player inspired by Winamp-era music visualizers. Its primary goal is to react to audio already playing on the computer—from music players, browsers, games, and videos—as well as microphone input.
+
+The first release target is Windows desktop. The intended experience is simple: choose an audio source and visual, then run it in a window, borderless, or fullscreen. The application will not be a media player.
+
+## Project status
+
+TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, three audio-reactive visual directions, a compact overlay, and windowed, borderless, and fullscreen presentation. The host-rendered scope uses bounded waveform trails, the particle field uses smoothed frequency-ordered motion trails, and the GPU direction discovers declarative WGSL presets and explicitly trusted native plugins. A portable local-test Windows package has been smoke-tested on the development host. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
+
+## Current prototype
+
+- Windows system-audio loopback and microphone input
+- Explicit output and microphone device selection with refresh
+- Automatic Windows default-device following with visible AUTO and PINNED modes
+- Waveform, spectrum, energy, and frequency-band analysis
+- Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
+- Automatic default-output recovery timing from detection through stream open and first capture packet
+- Three bundled visual directions:
+  - oscilloscope with neon trails
+  - spectrum-driven particles
+  - WGSL preset renderer with Feedback Tunnel and Solar Bloom
+- Local `.tvpreset` discovery, metadata, refresh, bounded response controls, full waveform/spectrum GPU inputs, and safe shader rejection
+- A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
+- Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with technical diagnostics and native extensions behind a discoverable details disclosure
+- Windowed, borderless, and fullscreen presentation
+
+## Run locally
+
+Install a current Rust toolchain, then run:
+
+```powershell
+cargo build --workspace
+cargo run -p thevisualizer
+```
+
+The workspace build also produces the example native-plugin DLL. The prototype starts in automatic mode on the default Windows output device and follows later default changes. Choosing a specific endpoint from the device menu pins it until `S` returns to automatic system output or `M` returns to automatic microphone input. Refresh rescans devices, left/right or numbered controls switch visual directions, up/down switches GPU presets, `B` toggles borderless presentation, `F11` toggles fullscreen, and `Tab` hides the overlay. `Escape` returns to windowed mode before closing the app.
+
+To create the portable local-test Windows archive:
+
+```powershell
+.\scripts\package-windows.ps1
+```
+
+This is not a signed public release. See [Windows Packaging](docs/PACKAGING.md).
+
+## Remaining v0.1 work
+
+- Clean-machine, device-loss, mixed-DPI, multi-monitor, and broader GPU validation
+- Externally measured playback-to-display latency
+- Public-release validation
+
+The detailed boundary is defined in [v0.1 Scope](docs/V0.1_SCOPE.md).
+
+## Extensions
+
+The proposed extension model has two tiers:
+
+1. Declarative shader presets for portable visuals and adjustable parameters.
+2. Versioned native plugins for trusted code that needs CPU-side behavior.
+
+Discovered native plugins remain disabled until the user reviews the exact artifact and selects `Approve & Load`. Approval lasts only for that run, is tied to the DLL's SHA-256 digest, and is not sandboxing or signing. See [Presets and Plugins](docs/PRESETS_AND_PLUGINS.md) and the [Plugin SDK](plugin-sdk/README.md).
+
+Future work may add MIDI, OSC, sensors, telemetry, and network inputs. Separate post-v0.1 research will explore standalone visualizers for ESP32-class displays, M5Tab5, and LED controllers. Desktop plugins and shaders are not assumed to run unchanged on embedded hardware.
+
+## Documentation
+
+- [Project Truth](PROJECT_TRUTH.md)
+- [Roadmap](ROADMAP.md)
+- [v0.1 Scope](docs/V0.1_SCOPE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Presets and Plugins](docs/PRESETS_AND_PLUGINS.md)
+- [Architecture Decisions](docs/DECISIONS.md)
+- [Windows Packaging](docs/PACKAGING.md)
+- [Licensing](docs/LICENSING.md)
+- [Embedded Vision](docs/EMBEDDED_VISION.md)
+- [Open Questions](docs/OPEN_QUESTIONS.md)
+
+## License
+
+TheVisualizer's original code, documentation, bundled WGSL presets, plugin SDK, and example plugin are licensed under the [Apache License 2.0](LICENSE). No MilkDrop/projectM code or community presets are included. Future compatibility assets require explicit, artifact-level provenance; see [Licensing](docs/LICENSING.md).
