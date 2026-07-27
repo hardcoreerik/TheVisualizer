@@ -1,5 +1,7 @@
 # TheVisualizer
 
+<p align="center"><img src="assets/thevisualizer-icon.svg" alt="TheVisualizer waveform mark" width="128"></p>
+
 TheVisualizer is a standalone, modern-retro visualization player inspired by Winamp-era music visualizers. Its primary goal is to react to audio already playing on the computer—from music players, browsers, games, and videos—as well as microphone input.
 
 The first release target is Windows desktop. The intended experience is simple: choose an audio source and visual, then run it in a window, borderless, or fullscreen. The application will not be a media player.
@@ -23,6 +25,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Local `.tvpreset` discovery, metadata, refresh, bounded response controls, full waveform/spectrum GPU inputs, and safe shader rejection
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
+- A repository-owned waveform mark embedded as the native application/window icon
 - Windowed, borderless, and fullscreen presentation
 
 ## Run locally

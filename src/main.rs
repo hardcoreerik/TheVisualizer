@@ -164,11 +164,15 @@ impl PresentationMode {
 }
 
 fn main() -> eframe::Result {
+    let icon =
+        eframe::icon_data::from_png_bytes(include_bytes!("../assets/thevisualizer-icon.png"))
+            .expect("embedded application icon must be a valid PNG");
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("TheVisualizer")
             .with_inner_size([1280.0, 720.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_min_inner_size([800.0, 500.0])
+            .with_icon(icon),
         ..Default::default()
     };
     if let Ok(name) = std::env::var("THEVISUALIZER_GPU")

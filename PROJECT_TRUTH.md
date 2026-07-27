@@ -64,6 +64,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - Named Scope, Particles, and Preset visual selection, response gain, source switching, overlay hiding, and explicit windowed, borderless, and fullscreen presentation modes.
 - Progressive overlay disclosure: source, preset, response, visual, levels, presentation, and status remain immediate, while capture format, GPU identity, native-plugin review, latency, and frame telemetry begin collapsed under `DETAILS` or `DETAILS & EXTENSIONS`. Errors remain immediate.
 - `WAITING`, `LIVE`, `SILENT`, and `ERROR` status presentation with source-specific next-step guidance for waiting and silence. Capture replacement clears prior features and visual history before the new source reports data.
+- A repository-owned SVG waveform mark, derived PNG, and embedded native application/window icon. The running app does not depend on an external icon file.
 - Sixteen focused automated tests across the workspace covering analysis, callback-sequence gating, quiet-state guidance, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, presentation, presets, the WGSL scalar and waveform/spectrum buffer contract, strict plugin manifests, changed-artifact rejection, ABI sizes, and the example-plugin lifecycle.
 
 ## Runtime-observed results
@@ -80,6 +81,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - All three visuals were selected and visually inspected.
 - The compact overlay and expanded details state were visually inspected at 1280×720 and the 800×500 minimum content size. The compact GPU state remained focused on player controls; the expanded minimum-size state retained capture/GPU details, the complete plugin warning and approval action, and telemetry without clipping.
 - The rebuilt compact overlay showed `Listening for system audio…` while waiting, removed contextual guidance during live capture, and showed `No signal · play audio on this device` after the stream became silent. Switching through a live microphone and back to system capture immediately cleared the prior source's levels and trails. The waiting guidance and all compact controls remained visible at the 800×500 minimum content size (816×539 decorated window).
+- The rebuilt debug executable and a fresh extracted release displayed the repository-owned waveform mark in the Windows title bar at its native small-icon size.
 - Named Scope, Particles, and Preset controls remained on one row at 1280×720 and the 800×500 minimum. Mouse selection changed to Particle Array, and repeated Windows system sounds visibly drove its bounded frequency trails without reopening capture.
 - With callback-sequence gating active, the release build produced live waveform motion from repeated Windows system sounds, switched to the default microphone with fresh nonzero features, then returned to system capture and again reported `LIVE` at approximately 0.051 RMS / 0.092 peak. This verifies that source replacement resets the gate.
 - Three quiet ten-second samples averaged 8.8% of one CPU core for both the committed package and the callback-gated release on this host. The current WASAPI callback cadence therefore produced no measurable local CPU reduction; the gate prevents stale re-analysis when callback cadence is lower than UI cadence but is not claimed as a performance win here.
@@ -109,7 +111,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - Selecting `Approve & Load` initialized the example plugin. Live system audio changed its bounded response multiplier while the host-owned Feedback Tunnel continued rendering.
 - Selecting `Unload` returned the plugin to `DISABLED`; the example lifecycle test independently verified that processing fails before initialization and after shutdown.
 - Restarting TheVisualizer returned the example plugin to `DISABLED`, confirming that approval is session-only.
-- `scripts\package-windows.ps1` completed successfully with the target-specific license collector and `cargo build --workspace --locked --release`. After the quiet-state guidance and source-reset refinement, it created a 7,321,197-byte local-test ZIP with SHA-256 `92DAD5883C1C337132A805EFE644F71C795D92F42396D93D5D19C13ED6595420`.
+- `scripts\package-windows.ps1` completed successfully with the target-specific license collector and `cargo build --workspace --locked --release`. After embedding the application mark, it created a 7,360,915-byte local-test ZIP with SHA-256 `F2E58DECB8A80EF7ABE26996469F63AE66D98499C24397EF87B5442232D95BCB`.
 - The rebuilt package launched from its staged directory, discovered the package-relative presets and example plugin, compiled the richer Feedback Tunnel shader, and rendered it at about 165 FPS in a quiet windowed observation on the NVIDIA adapter.
 - The package's third-party bundle contained 205 resolved package entries and 384 non-empty license or notice files. Every resolved package had one summary entry.
 - A second independent collector run produced the same aggregate path-and-content digest as the staged bundle.
@@ -141,7 +143,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - Rendering on the currently disabled AMD integrated GPU and minimum hardware/driver validation
 - Automatic preset-directory watching, an editor, additional parameter types, or remote preset delivery
 - Persistent approval records, signed-plugin infrastructure, or cross-process crash isolation
-- A clean-machine package run, installer, updater, signing, release metadata/icon, public distribution, or formal installed-program uninstall
+- A clean-machine package run, installer, updater, signing, signed executable metadata/resource icon, public distribution, or formal installed-program uninstall
 - macOS or Linux builds and capture backends
 - MilkDrop, projectM, or legacy Winamp compatibility
 - MIDI, OSC, sensor, telemetry, or network input adapters
