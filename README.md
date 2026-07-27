@@ -22,7 +22,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
   - WGSL preset renderer with Feedback Tunnel and Solar Bloom
 - Local `.tvpreset` discovery, metadata, refresh, bounded response controls, full waveform/spectrum GPU inputs, and safe shader rejection
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
-- Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with technical diagnostics and native extensions behind a discoverable details disclosure
+- Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
 - Windowed, borderless, and fullscreen presentation
 
 ## Run locally

@@ -63,13 +63,13 @@ This document records verified project state. Planned behavior belongs in the [R
 - The repository and portable package contain only repository-owned presets and plugin content; no MilkDrop/projectM code, community presets, or third-party textures are included.
 - Named Scope, Particles, and Preset visual selection, response gain, source switching, overlay hiding, and explicit windowed, borderless, and fullscreen presentation modes.
 - Progressive overlay disclosure: source, preset, response, visual, levels, presentation, and status remain immediate, while capture format, GPU identity, native-plugin review, latency, and frame telemetry begin collapsed under `DETAILS` or `DETAILS & EXTENSIONS`. Errors remain immediate.
-- `WAITING`, `LIVE`, `SILENT`, and `ERROR` status presentation.
-- Fifteen focused automated tests across the workspace covering analysis, callback-sequence gating, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, presentation, presets, the WGSL scalar and waveform/spectrum buffer contract, strict plugin manifests, changed-artifact rejection, ABI sizes, and the example-plugin lifecycle.
+- `WAITING`, `LIVE`, `SILENT`, and `ERROR` status presentation with source-specific next-step guidance for waiting and silence. Capture replacement clears prior features and visual history before the new source reports data.
+- Sixteen focused automated tests across the workspace covering analysis, callback-sequence gating, quiet-state guidance, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, presentation, presets, the WGSL scalar and waveform/spectrum buffer contract, strict plugin manifests, changed-artifact rejection, ABI sizes, and the example-plugin lifecycle.
 
 ## Runtime-observed results
 
 - `cargo check --workspace` completed successfully on 2026-07-27.
-- `cargo test --workspace` passed 15 tests with 0 failures on 2026-07-27.
+- `cargo test --workspace` passed 16 tests with 0 failures on 2026-07-27.
 - `cargo clippy --workspace -- -D warnings` completed successfully on 2026-07-27.
 - After the same-ID recovery change, the rebuilt debug application opened automatic system capture and local Windows system sounds produced `LIVE`, nonzero RMS/peak values, and visible neon trails.
 - The debug application launched and rendered at 1280×720 on the Windows development host.
@@ -79,6 +79,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - The default HD Pro Webcam C920 microphone opened at 48,000 Hz stereo, reported `LIVE`, produced nonzero RMS/peak values, and visibly drove all three bundled visuals without reopening capture.
 - All three visuals were selected and visually inspected.
 - The compact overlay and expanded details state were visually inspected at 1280×720 and the 800×500 minimum content size. The compact GPU state remained focused on player controls; the expanded minimum-size state retained capture/GPU details, the complete plugin warning and approval action, and telemetry without clipping.
+- The rebuilt compact overlay showed `Listening for system audio…` while waiting, removed contextual guidance during live capture, and showed `No signal · play audio on this device` after the stream became silent. Switching through a live microphone and back to system capture immediately cleared the prior source's levels and trails. The waiting guidance and all compact controls remained visible at the 800×500 minimum content size (816×539 decorated window).
 - Named Scope, Particles, and Preset controls remained on one row at 1280×720 and the 800×500 minimum. Mouse selection changed to Particle Array, and repeated Windows system sounds visibly drove its bounded frequency trails without reopening capture.
 - With callback-sequence gating active, the release build produced live waveform motion from repeated Windows system sounds, switched to the default microphone with fresh nonzero features, then returned to system capture and again reported `LIVE` at approximately 0.051 RMS / 0.092 peak. This verifies that source replacement resets the gate.
 - Three quiet ten-second samples averaged 8.8% of one CPU core for both the committed package and the callback-gated release on this host. The current WASAPI callback cadence therefore produced no measurable local CPU reduction; the gate prevents stale re-analysis when callback cadence is lower than UI cadence but is not claimed as a performance win here.
@@ -108,12 +109,13 @@ This document records verified project state. Planned behavior belongs in the [R
 - Selecting `Approve & Load` initialized the example plugin. Live system audio changed its bounded response multiplier while the host-owned Feedback Tunnel continued rendering.
 - Selecting `Unload` returned the plugin to `DISABLED`; the example lifecycle test independently verified that processing fails before initialization and after shutdown.
 - Restarting TheVisualizer returned the example plugin to `DISABLED`, confirming that approval is session-only.
-- `scripts\package-windows.ps1` completed successfully with the target-specific license collector and `cargo build --workspace --locked --release`. After gating analysis by capture callback sequence, it created a 7,320,110-byte local-test ZIP with SHA-256 `4B8C6A1B5CB7BE0466633D1078CF3C65E8D46F35F761AC28AD92DF28760F415C`.
+- `scripts\package-windows.ps1` completed successfully with the target-specific license collector and `cargo build --workspace --locked --release`. After the quiet-state guidance and source-reset refinement, it created a 7,321,197-byte local-test ZIP with SHA-256 `92DAD5883C1C337132A805EFE644F71C795D92F42396D93D5D19C13ED6595420`.
 - The rebuilt package launched from its staged directory, discovered the package-relative presets and example plugin, compiled the richer Feedback Tunnel shader, and rendered it at about 165 FPS in a quiet windowed observation on the NVIDIA adapter.
 - The package's third-party bundle contained 205 resolved package entries and 384 non-empty license or notice files. Every resolved package had one summary entry.
 - A second independent collector run produced the same aggregate path-and-content digest as the staged bundle.
 - A fresh extraction under `dist` contained 398 staged files and passed every entry in `SHA256SUMS.txt` with zero failures.
 - A fresh temporary extraction of the same-ID recovery package passed all 397 payload entries in `SHA256SUMS.txt` with zero failures.
+- A fresh extraction of the quiet-state package contained 398 files and passed all 397 payload checksum entries with zero failures. The extracted player showed the system-audio waiting guidance, reached `LIVE` with nonzero RMS/peak values from bounded Windows system sounds, and returned to the actionable silent state.
 - The fresh extracted package launched the updated executable; bounded system sounds produced `LIVE` state and visibly drove the radial particle field.
 - Every staged file and every file extracted into a fresh directory matched its entry in `SHA256SUMS.txt`.
 - The extracted release executable launched from the fresh directory on the development host, opened the default 48,000 Hz stereo loopback source, and discovered both packaged WGSL presets and the packaged example plugin.

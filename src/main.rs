@@ -333,6 +333,7 @@ impl VisualizerApp {
                     *samples = SampleBuffer::default();
                 }
                 self.latency = LatencyStats::default();
+                self.features = Features::default();
                 self.visual_history = VisualHistory::default();
                 self.last_analyzed_callback_sequence = 0;
                 self.capture = Some(capture);
@@ -904,7 +905,17 @@ impl VisualizerApp {
                                 .monospace()
                                 .color(Color32::from_rgb(90, 245, 220)),
                         );
-                        ui.add_space(8.0);
+                        let source = self.capture.as_ref().map(|capture| capture.source);
+                        if let Some(hint) = status_hint(status, source) {
+                            ui.label(
+                                egui::RichText::new(hint)
+                                    .small()
+                                    .color(Color32::from_rgb(145, 165, 185)),
+                            );
+                            ui.add_space(4.0);
+                        } else {
+                            ui.add_space(8.0);
+                        }
 
                         ui.horizontal(|ui| {
                             if ui
@@ -1393,6 +1404,19 @@ fn callback_is_new(last: &mut u64, current: u64) -> bool {
     }
 }
 
+fn status_hint(status: &str, source: Option<SourceKind>) -> Option<&'static str> {
+    match (status, source) {
+        ("WAITING", Some(SourceKind::System)) => Some("Listening for system audio…"),
+        ("WAITING", Some(SourceKind::Microphone)) => Some("Starting microphone capture…"),
+        ("SILENT", Some(SourceKind::System)) => Some("No signal · play audio on this device"),
+        ("SILENT", Some(SourceKind::Microphone)) => {
+            Some("No signal · make sound near the microphone")
+        }
+        ("ERROR", _) => Some("Capture unavailable · review the message below"),
+        _ => None,
+    }
+}
+
 fn preset_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PRESETS", "presets")
 }
@@ -1418,8 +1442,8 @@ fn resource_directory(environment: &str, folder: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultSwitchTiming, Features, FrameStats, LatencyStats, PresentationMode, VisualHistory,
-        callback_is_new, default_needs_recovery,
+        DefaultSwitchTiming, Features, FrameStats, LatencyStats, PresentationMode, SourceKind,
+        VisualHistory, callback_is_new, default_needs_recovery, status_hint,
     };
     use std::time::{Duration, Instant};
 
@@ -1439,6 +1463,20 @@ mod tests {
         assert!(callback_is_new(&mut last, 1));
         assert!(!callback_is_new(&mut last, 1));
         assert!(callback_is_new(&mut last, 2));
+    }
+
+    #[test]
+    fn quiet_status_guidance_matches_the_active_source() {
+        assert_eq!(
+            status_hint("SILENT", Some(SourceKind::System)),
+            Some("No signal · play audio on this device")
+        );
+        assert_eq!(
+            status_hint("SILENT", Some(SourceKind::Microphone)),
+            Some("No signal · make sound near the microphone")
+        );
+        assert_eq!(status_hint("LIVE", Some(SourceKind::System)), None);
+        assert!(status_hint("ERROR", None).is_some());
     }
 
     #[test]
