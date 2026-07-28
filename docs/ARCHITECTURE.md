@@ -14,6 +14,8 @@ bounded sample handoff --> analysis snapshot --> preset/plugin parameters
                                                    |
                                                    v
 window/input --> player state --> host-owned wgpu renderer --> display
+        |
+        +--> local Visual Director brief (no network request)
 ```
 
 ## Technology direction
@@ -50,17 +52,27 @@ Silence produces stable zero or decaying values rather than invalid numbers. Sou
 
 Player state owns the selected source, selected visual, overlay visibility, presentation mode, frame pacing, and status. The default overlay keeps source, preset, response, numbered Scope/Particles/Preset selection, levels, presentation, and status visible. Number keys select each visual directly while Left/Right cycles them; the shortcut footer uses portable ASCII rather than depending on optional font glyphs. Waiting, silence, and capture failure add a concise source-aware next step; live capture removes that guidance. Capture replacement clears the previous source's features and visual history before waiting for new packets. Capture format, GPU identity, native-extension review, performance telemetry, and Display/60/30 FPS pacing use one discoverable details disclosure; actionable capture, device, and shader errors remain outside it. Presentation mode is an explicit windowed, borderless, or fullscreen state; `Escape` returns a presentation state to windowed mode before it closes the app. Changing a visual does not restart capture. Resizing or changing presentation mode changes surfaces through the host renderer, not through plugins.
 
+Named `.tvscene` snapshots persist host-owned creative state without changing preset packages. A strict bounded parser records the required mode identity, relevant parameter values, routed colors/materials, camera, and at most eight zones. Restore selects the required host mode or declarative preset, rejects missing dependencies, clamps parameter values against current preset metadata, and then applies the snapshot. Scene files contain values only and cannot introduce WGSL or native code.
+
 ### Rendering
 
-The current host draws the scope and particle visuals with egui painting. One bounded ten-snapshot history adds real waveform trails and attack/release-smoothed spectrum trails without changing the shared feature contract; switching capture sources clears that visual history. The particle view maps low-to-high spectrum order around a radial spiral with a reactive core. The GPU visual uses a discovered WGSL preset, render pipeline, uniform buffers, one fixed-size read-only feature buffer, and an eframe wgpu paint callback. Each frame supplies output size, time, delta, response gain, RMS, peak, low/mid/high energy, the 256-point waveform, and the 64-band spectrum. Preset replacement is compiled under a wgpu validation scope and becomes active only after successful validation; failure keeps the last working pipeline. A CPU-painted tunnel remains the fallback if eframe does not provide a wgpu render state.
+The current host draws the scope and particle visuals with egui painting. One bounded ten-snapshot history adds real waveform trails and attack/release-smoothed spectrum trails without changing the shared feature contract; switching capture sources clears that visual history. The particle view maps low-to-high spectrum order around a radial spiral with a reactive core. The GPU visual uses a discovered WGSL preset, render pipeline, uniform buffers, and fixed-size read-only feature, scene, and parameter buffers through an eframe wgpu paint callback. Each frame supplies output size, time, delta, response gain, RMS, peak, low/mid/high energy, the 256-point waveform, the 64-band spectrum, up to eight sound zones, camera state, routed colors/materials, and up to forty mode controls. Preset replacement is compiled under a wgpu validation scope and becomes active only after successful validation; failure keeps the last working pipeline. A CPU-painted tunnel remains the fallback if eframe does not provide a wgpu render state.
 
 The host owns the `wgpu` instance, adapter, device, queue, surfaces, textures, and frame timing. Display pacing follows the presentation cadence; the 60 and 30 FPS choices apply a host-side minimum frame interval and retain the existing immutable-feature/coalescing behavior. The overlay reports both the choice and measured application cadence. It also reports the selected adapter, and an optional `THEVISUALIZER_GPU` environment value can request a named adapter for focused compatibility checks. v0.1 does not expose raw GPU or native window handles to extensions.
 
 ### Extensions
 
-The initial single-file `.tvpreset` format provides strict identity, author, license, format-version, bounded response-parameter, and WGSL metadata consumed by the host. The player discovers files from the configured preset directory and reloads them on explicit refresh.
+The single-file `.tvpreset` format provides strict identity, author, license, format-version, bounded parameter, and WGSL metadata consumed by the host. Format 1 retains the original response-only contract; format 2 adds grouped controls and fixed scene/parameter bindings. The player discovers files from the configured preset directory and reloads them on explicit refresh.
 
 Native plugins use the size-tagged C ABI v1 in the [Plugin SDK](../plugin-sdk/README.md). Discovery parses strict manifests and hashes libraries without loading them. Only `Approve & Load` re-hashes and loads the selected artifact; the host then passes read-only feature slices to a synchronous process callback and clamps its response multiplier before applying it to the host-owned shader. Unload, processing failure, refresh, and app shutdown call the plugin shutdown path. No audio, GPU, window, or frame-lifecycle handle crosses the ABI. The detailed boundary is in [Presets and Plugins](PRESETS_AND_PLUGINS.md).
+
+### Visual Director
+
+The implemented local Visual Director augments the normalized feature snapshot with spectral centroid, 85% rolloff, flatness, crest factor, and positive spectral flux. A bounded 12-second history derives movement, onset density, dynamic contrast, and passage direction. It combines that Visual DNA with the active mode, routed colors, material finish, capture profile, and explicit user controls.
+
+Scene invention independently selects subject, environment, era, event, scale, weather, composition, and lighting. It scores several candidates against a bounded structured history, weighting repeated subject and location more strongly than repeated surface treatment. A versioned append-only local file preserves the last loaded concept records across application restarts and records the generation metadata and full prompt; malformed records are skipped without blocking the player. The director then selects a small plausible subset of photographic imperfections, applies contextual cliché constraints, and produces the scene/camera/light/material/motion specification and generation prompt. A deterministic preflight reports concept novelty, physical plausibility, cliché risk, and construction notes. It does not infer unmeasured tempo, BPM, key, genre, lyrics, or mood, and it makes no network request.
+
+The proposed first image provider is the OpenAI Image API using `gpt-image-2`, behind an explicit user action and environment-supplied credential. That API connection, response decoding, generated-image persistence, critique, and generated-asset ingestion are not implemented. See [Visual Director](VISUAL_DIRECTOR.md).
 
 ## Platform path
 
@@ -82,4 +94,4 @@ Shared analysis and visual concepts should remain portable. Device enumeration, 
 
 ## Deferred boundaries
 
-Media playback, preset editing, plugin distribution, cloud services, additional data adapters, cross-process plugin isolation, and embedded runtimes are separate milestones.
+Media playback, preset editing, plugin distribution, paid image generation, generated-asset ingestion, cloud services, additional data adapters, cross-process plugin isolation, and embedded runtimes are separate milestones.

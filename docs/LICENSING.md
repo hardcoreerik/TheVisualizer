@@ -6,7 +6,7 @@ This document records the project license decision and the boundary around futur
 
 ## Project license
 
-TheVisualizer's original source code, documentation, bundled Feedback Tunnel and Solar Bloom WGSL presets, plugin SDK, and example plugin are licensed under [Apache-2.0](../LICENSE). Their manifests use the same SPDX identifier.
+TheVisualizer's original source code, documentation, eight bundled WGSL presets, plugin SDK, and example plugin are licensed under [Apache-2.0](../LICENSE). Their manifests use the same SPDX identifier.
 
 The repository currently contains no MilkDrop source, projectM source, `.milk` presets, community preset packs, or third-party textures. TheVisualizer's license does not grant rights to content obtained elsewhere.
 

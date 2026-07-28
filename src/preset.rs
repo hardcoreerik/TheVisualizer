@@ -4,10 +4,14 @@ use std::{
 };
 
 const MAX_PRESET_BYTES: u64 = 128 * 1024;
-const PRESET_FORMAT_VERSION: u32 = 1;
+const MAX_PRESET_FORMAT_VERSION: u32 = 2;
+const MAX_PRESET_PARAMETERS: usize = 40;
 
 #[derive(Clone)]
 pub struct PresetParameter {
+    pub id: String,
+    pub label: String,
+    pub group: String,
     pub minimum: f32,
     pub maximum: f32,
     pub default: f32,
@@ -15,12 +19,14 @@ pub struct PresetParameter {
 
 #[derive(Clone)]
 pub struct Preset {
+    pub format: u32,
     pub id: String,
     pub name: String,
     pub version: String,
     pub author: String,
     pub license: String,
     pub response: PresetParameter,
+    pub parameters: Vec<PresetParameter>,
     pub shader: String,
     pub path: PathBuf,
 }
@@ -45,7 +51,7 @@ impl Preset {
         let mut version = None;
         let mut author = None;
         let mut license = None;
-        let mut response = None;
+        let mut parameter_values = Vec::new();
 
         for line in header.lines().filter(|line| !line.trim().is_empty()) {
             let metadata = line
@@ -62,15 +68,15 @@ impl Preset {
                 "version" => set_once(&mut version, value.to_owned())?,
                 "author" => set_once(&mut author, value.to_owned())?,
                 "license" => set_once(&mut license, value.to_owned())?,
-                "parameter" => set_once(&mut response, parse_response(value)?)?,
+                "parameter" => parameter_values.push(value.to_owned()),
                 key => return Err(format!("unknown metadata key `{key}`")),
             }
         }
 
-        if format != Some(PRESET_FORMAT_VERSION) {
+        let format = format.ok_or("missing `format` metadata")?;
+        if !(1..=MAX_PRESET_FORMAT_VERSION).contains(&format) {
             return Err(format!(
-                "unsupported preset format {}; expected {PRESET_FORMAT_VERSION}",
-                format.map_or_else(|| "missing".to_owned(), |value| value.to_string())
+                "unsupported preset format {format}; expected 1..={MAX_PRESET_FORMAT_VERSION}"
             ));
         }
         let id = required(id, "id")?;
@@ -81,19 +87,53 @@ impl Preset {
         let version = required(version, "version")?;
         let author = required(author, "author")?;
         let license = required(license, "license")?;
-        let response = response.ok_or("missing `parameter` metadata")?;
+        let parameters = match format {
+            1 => {
+                if parameter_values.len() != 1 {
+                    return Err("format 1 requires exactly one `parameter`".to_owned());
+                }
+                vec![parse_response(&parameter_values[0])?]
+            }
+            2 => {
+                if parameter_values.is_empty() || parameter_values.len() > MAX_PRESET_PARAMETERS {
+                    return Err(format!(
+                        "format 2 requires 1..={MAX_PRESET_PARAMETERS} parameters"
+                    ));
+                }
+                let mut parameters = Vec::with_capacity(parameter_values.len());
+                for value in parameter_values {
+                    let parameter = parse_parameter(&value)?;
+                    if parameters
+                        .iter()
+                        .any(|known: &PresetParameter| known.id == parameter.id)
+                    {
+                        return Err(format!("duplicate parameter id `{}`", parameter.id));
+                    }
+                    parameters.push(parameter);
+                }
+                parameters
+            }
+            _ => unreachable!(),
+        };
+        let response = parameters
+            .iter()
+            .find(|parameter| parameter.id == "response")
+            .cloned()
+            .ok_or("missing `response` parameter")?;
         let shader = shader.trim();
         if shader.is_empty() {
             return Err("shader source is empty".to_owned());
         }
 
         Ok(Self {
+            format,
             id,
             name,
             version,
             author,
             license,
             response,
+            parameters,
             shader: shader.to_owned(),
             path,
         })
@@ -107,7 +147,8 @@ pub fn discover(directory: &Path) -> PresetDiscovery {
             .map(|entry| entry.path())
             .filter(|path| {
                 path.extension()
-                    .is_some_and(|extension| extension == "tvpreset")
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("tvpreset"))
             })
             .collect::<Vec<_>>(),
         Err(error) => {
@@ -153,28 +194,55 @@ fn parse_response(value: &str) -> Result<PresetParameter, String> {
     if parts.len() != 4 || parts[0] != "response" {
         return Err("parameter must be `response|min|max|default`".to_owned());
     }
-    let minimum = parts[1]
+    let (minimum, maximum, default) = parse_bounds(parts[1], parts[2], parts[3])?;
+    Ok(PresetParameter {
+        id: "response".to_owned(),
+        label: "Response".to_owned(),
+        group: "Audio".to_owned(),
+        minimum,
+        maximum,
+        default,
+    })
+}
+
+fn parse_parameter(value: &str) -> Result<PresetParameter, String> {
+    let parts = value.split('|').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 6 {
+        return Err("format 2 parameter must be `group|id|label|min|max|default`".to_owned());
+    }
+    if parts[..3].iter().any(|part| part.is_empty()) || !valid_id(parts[1]) {
+        return Err("parameter group, id, and label must be valid and non-empty".to_owned());
+    }
+    let (minimum, maximum, default) = parse_bounds(parts[3], parts[4], parts[5])?;
+    Ok(PresetParameter {
+        id: parts[1].to_owned(),
+        label: parts[2].to_owned(),
+        group: parts[0].to_owned(),
+        minimum,
+        maximum,
+        default,
+    })
+}
+
+fn parse_bounds(minimum: &str, maximum: &str, default: &str) -> Result<(f32, f32, f32), String> {
+    let minimum = minimum
         .parse::<f32>()
-        .map_err(|_| "invalid response minimum")?;
-    let maximum = parts[2]
+        .map_err(|_| "invalid parameter minimum")?;
+    let maximum = maximum
         .parse::<f32>()
-        .map_err(|_| "invalid response maximum")?;
-    let default = parts[3]
+        .map_err(|_| "invalid parameter maximum")?;
+    let default = default
         .parse::<f32>()
-        .map_err(|_| "invalid response default")?;
+        .map_err(|_| "invalid parameter default")?;
     if !minimum.is_finite()
         || !maximum.is_finite()
         || !default.is_finite()
         || minimum >= maximum
         || !(minimum..=maximum).contains(&default)
     {
-        return Err("response bounds/default are invalid".to_owned());
+        return Err("parameter bounds/default are invalid".to_owned());
     }
-    Ok(PresetParameter {
-        minimum,
-        maximum,
-        default,
-    })
+    Ok((minimum, maximum, default))
 }
 
 fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
@@ -221,6 +289,31 @@ mod tests {
 
         let bundled = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/presets")));
         assert!(bundled.errors.is_empty(), "{:?}", bundled.errors);
-        assert_eq!(bundled.presets.len(), 2);
+        assert_eq!(bundled.presets.len(), 8);
+        let city = bundled
+            .presets
+            .iter()
+            .find(|preset| preset.id == "thevisualizer.cityscape")
+            .unwrap();
+        assert_eq!(city.format, 2);
+        assert_eq!(city.parameters.len(), 35);
+        for preset in &bundled.presets {
+            assert_eq!(preset.format, 2);
+            assert!((10..=40).contains(&preset.parameters.len()));
+        }
+    }
+
+    #[test]
+    fn discovery_accepts_mixed_case_extension() {
+        let directory =
+            std::env::temp_dir().join(format!("thevisualizer-preset-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("test.TVPRESET"), VALID).unwrap();
+
+        let discovery = discover(&directory);
+
+        fs::remove_dir_all(directory).unwrap();
+        assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
+        assert_eq!(discovery.presets.len(), 1);
     }
 }

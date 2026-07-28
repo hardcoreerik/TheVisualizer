@@ -11,21 +11,24 @@ The implemented preset package is one UTF-8 `.tvpreset` file, limited to 128 KiB
 - stable preset identifier
 - display name and version
 - author and content-license metadata
-- required preset-format version (`1`)
+- required preset-format version (`1` or `2`)
 - WGSL shader source
-- one `response|min|max|default` adjustable parameter with finite ordered bounds
+- format 1: one `response|min|max|default` adjustable parameter
+- format 2: 1–40 `group|id|label|min|max|default` parameters, including `response`
 
 The host rejects missing, duplicate, unknown, malformed, or unsupported metadata. It compiles the shader inside a wgpu validation scope, owns all GPU resources, binds normalized audio features, and reports a concise error without terminating the player or replacing the last working pipeline. Presets do not execute native CPU code.
 
-Format 1 exposes three host-owned bind-group entries:
+The host exposes five fixed-size bind-group entries:
 
 - binding 0: the original 32-byte uniform contract containing resolution, time, response gain, low/mid/high energy, and RMS
 - binding 1: a fixed read-only storage buffer containing 256 waveform values followed by 64 spectrum values
 - binding 2: a 16-byte uniform containing frame delta, peak, waveform length, and spectrum length
+- binding 3: 96 read-only scene floats containing camera state, up to eight normalized sound zones, routed colors, and material values
+- binding 4: 40 read-only finite mode-parameter floats in metadata order
 
-The original binding remains unchanged, so a format-1 shader may ignore the two richer entries. Bundled Feedback Tunnel samples the spectrum by angle; Solar Bloom samples both waveform and spectrum by angle. The fixed bounds prevent preset-controlled buffer allocation.
+Bindings 0–2 remain layout-compatible with format 1. Format-2 presets use the scene and parameter buffers without receiving GPU/window handles or allocating host buffers. The fixed bounds prevent preset-controlled buffer allocation.
 
-The player discovers presets beside the executable or from the working-directory `presets` folder; `THEVISUALIZER_PRESETS` overrides that location for focused testing. Refresh rescans and reloads the active preset. Feedback Tunnel and Solar Bloom exercise the same host uniform contract. Automatic directory watching, an editor, remote downloads, and a marketplace are outside v0.1.
+The player discovers `.tvpreset` extensions case-insensitively beside the executable or from the working-directory `presets` folder; `THEVISUALIZER_PRESETS` overrides that location for focused testing. Startup skips rejected shaders until one compiles, and refresh can initialize the GPU renderer after an initially invalid or empty directory. The eight bundled presets are Aurora Flow, Feedback Tunnel, Gravity Wells, Kaleido Reactor, Neon Horizon, Ripple Garden, Solar Bloom, and TheVisualCityScape. Each is format 2 with 10–35 grouped controls. Automatic directory watching, an editor, remote downloads, and a marketplace are outside v0.1.
 
 ### Trusted native plugins
 

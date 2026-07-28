@@ -26,7 +26,8 @@ Resolve these questions with official documentation, focused code spikes, measur
 
 ## Presets and native plugins
 
-- Which additional parameter types or feature bindings earn a place beyond the initial bounded response control?
+- Which non-slider parameter types or additional feature bindings earn a place beyond the fixed format-2 scene and control buffers?
+- Which `.tvscene` migration, naming, deletion, sharing, and provenance features are justified after real saved-view usage?
 - Which shader limits prevent accidental or hostile resource exhaustion?
 - Is in-process crash risk acceptable after the example plugin, or is a separate host justified?
 - How should native libraries be packaged on future operating systems and architectures?
@@ -73,8 +74,8 @@ Resolve these questions with official documentation, focused code spikes, measur
 - Embedded research begins after desktop v0.1 and targets standalone operation first.
 - An application-owned WGSL callback renders and responds to normalized audio features on the NVIDIA GeForce RTX 5070 Ti in windowed and fullscreen modes.
 - Windowed, borderless, fullscreen, restore, and maximize-resize transitions preserved the host-owned WGSL renderer on the first development host; system capture also remained live during fullscreen rendering.
-- A bounded single-file `.tvpreset` format discovered and switched Feedback Tunnel and Solar Bloom; an invalid WGSL probe was rejected while the last working pipeline remained usable.
-- WGSL presets now receive bounded 256-point waveform and 64-band spectrum buffers plus peak and frame delta, in addition to the original scalar uniform contract. Both bundled presets compiled and visibly used the richer data in windowed and 3440×1440 fullscreen validation.
+- A bounded single-file `.tvpreset` format discovers eight bundled format-2 presets with 10–35 grouped sliders; an invalid WGSL probe was rejected while the last working pipeline remained usable.
+- WGSL presets now receive bounded 256-point waveform and 64-band spectrum buffers plus peak and frame delta, in addition to the original scalar uniform contract. All eight bundled presets compiled in the live player; the richer data path was visibly exercised in windowed and fullscreen validation.
 - ABI v1 uses size-tagged initialize/process/shutdown callbacks, call-scoped read-only feature pointers, and one host-clamped response output with no GPU/window handles.
 - Native-plugin approval is session-only and tied to the full SHA-256 digest; discovery and restart leave the example disabled, and approval is explicitly not a signature or sandbox.
 - Windows x86_64 local testing uses one portable ZIP with package-relative plugin paths and SHA-256 checksums; a fresh-directory smoke test passed on the development host.

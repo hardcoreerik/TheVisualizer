@@ -8,7 +8,7 @@ The first release target is Windows desktop. The intended experience is simple: 
 
 ## Project status
 
-TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, three audio-reactive visual directions, a compact overlay, and windowed, borderless, and fullscreen presentation. The host-rendered scope uses bounded waveform trails, the particle field uses smoothed frequency-ordered motion trails, and the GPU direction discovers declarative WGSL presets and explicitly trusted native plugins. A portable local-test Windows package has been smoke-tested on the development host. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
+TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, ten audio-reactive modes, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Eight modes are declarative WGSL presets with grouped sliders; the two host-rendered modes provide waveform trails and frequency-ordered particles. A portable local-test Windows package has been smoke-tested on the development host, but the expanded preset package has not yet completed packaging validation. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
 
 ## Current prototype
 
@@ -18,11 +18,12 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Waveform, spectrum, energy, and frequency-band analysis
 - Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
 - Automatic default-output recovery timing from detection through stream open and first capture packet
-- Three bundled visual directions:
-  - oscilloscope with neon trails
-  - spectrum-driven particles
-  - WGSL preset renderer with Feedback Tunnel and Solar Bloom
-- Local `.tvpreset` discovery, metadata, refresh, bounded response controls, full waveform/spectrum GPU inputs, and safe shader rejection
+- Ten bundled modes: Neon Scope, Particle Forge, Feedback Tunnel, Solar Bloom, Neon Horizon, Gravity Wells, Ripple Garden, Kaleido Reactor, Aurora Flow, and TheVisualCityScape
+- Up to eight draggable sound zones with independent Full, Bass, Mid, or Treble routing, radius, strength, and pin state
+- A visible `Instrument [I]` panel and matching right-click menu for mode selection, live band meters, grouped per-mode sliders, sound zones, seven palettes, five material finishes, per-band colors, and gradient controls for glow, gloss, and saturation
+- Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts
+- A local Visual Director with rolling Visual DNA, structured novelty-scored scene invention, 17 capture choices, controlled photographic imperfections, preflight critique, generation-ready prompts, durable local brief history, and Markdown brief export without making an API request
+- Local `.tvpreset` discovery, format-2 grouped parameters, refresh, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and safe shader rejection
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
 - A repository-owned waveform mark embedded as the native application/window icon
@@ -38,7 +39,7 @@ cargo build --workspace
 cargo run -p thevisualizer
 ```
 
-The workspace build also produces the example native-plugin DLL. The prototype starts in automatic mode on the default Windows output device and follows later default changes. Choosing a specific endpoint from the device menu pins it until `S` returns to automatic system output or `M` returns to automatic microphone input. Refresh rescans devices, Left/Right cycles visual directions, `1`/`2`/`3` selects one directly, Up/Down switches GPU presets, `B` toggles borderless presentation, `F11` toggles fullscreen, and `Tab` hides the overlay. `Escape` returns to windowed mode before closing the app.
+The workspace build also produces the example native-plugin DLL. The prototype starts in automatic mode on the default Windows output device and follows later default changes. Choosing a specific endpoint from the device menu pins it until `S` returns to automatic system output or `M` returns to automatic microphone input. Refresh rescans devices, Left/Right cycles visual directions, `1`/`2`/`3` selects one directly, Up/Down switches GPU presets, `I` toggles the visible Instrument panel, `B` toggles borderless presentation, `F11` toggles fullscreen, and `Tab` hides the overlay. The Instrument panel and right-click menu expose controls relevant to the active mode rather than one generic control list. Its Saved Scenes section captures and restores named views. Drag a zone to reposition it, drag empty space to rotate supported scenes, use the wheel to zoom, double-click empty space to add a zone, and press `R` to reset interaction. `Escape` closes the Instrument panel first, then returns to windowed mode before closing the app.
 
 To create the portable local-test Windows archive:
 
@@ -58,7 +59,7 @@ The detailed boundary is defined in [v0.1 Scope](docs/V0.1_SCOPE.md).
 
 ## Extensions
 
-The proposed extension model has two tiers:
+The implemented extension model has two tiers:
 
 1. Declarative shader presets for portable visuals and adjustable parameters.
 2. Versioned native plugins for trusted code that needs CPU-side behavior.
@@ -74,6 +75,8 @@ Future work may add MIDI, OSC, sensors, telemetry, and network inputs. Separate 
 - [v0.1 Scope](docs/V0.1_SCOPE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Presets and Plugins](docs/PRESETS_AND_PLUGINS.md)
+- [Interactive Modes](docs/INTERACTIVE_MODES.md)
+- [Visual Director](docs/VISUAL_DIRECTOR.md)
 - [Architecture Decisions](docs/DECISIONS.md)
 - [Windows Packaging](docs/PACKAGING.md)
 - [Licensing](docs/LICENSING.md)

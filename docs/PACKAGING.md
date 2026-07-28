@@ -12,7 +12,7 @@ The script:
 
 1. requires Windows x86_64 and keeps generated output inside `dist`
 2. builds the locked release workspace
-3. stages the player, both WGSL presets, example-plugin manifest and DLL, C/Rust SDK documentation, and project license/provenance files
+3. stages the player, all bundled WGSL presets, example-plugin manifest and DLL, C/Rust SDK documentation, and project license/provenance files
 4. collects license metadata and files for the locked Windows target dependency graph, failing if required evidence is missing
 5. rewrites only the staged plugin manifest to use its package-relative DLL
 6. adds an explicit local-test/public-release-gate notice and `SHA256SUMS.txt`

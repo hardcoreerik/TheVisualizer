@@ -59,8 +59,7 @@ $docsPath = Join-Path $stagePath "docs"
 New-Item -ItemType Directory -Path $presetPath, $pluginPath, (Join-Path $sdkPath "include"), $docsPath -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer.exe") -Destination $stagePath
-Copy-Item -LiteralPath (Join-Path $repoRoot "presets\feedback-tunnel.tvpreset") -Destination $presetPath
-Copy-Item -LiteralPath (Join-Path $repoRoot "presets\solar-bloom.tvpreset") -Destination $presetPath
+Copy-Item -Path (Join-Path $repoRoot "presets\*.tvpreset") -Destination $presetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer_example_plugin.dll") -Destination $pluginPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\README.md") -Destination $sdkPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\include\thevisualizer_plugin.h") -Destination (Join-Path $sdkPath "include")
@@ -84,6 +83,7 @@ TheVisualizer $($package.version) - Windows x86_64 local test
 Run thevisualizer.exe. The player starts on the default Windows system-output loopback source.
 Use S/M for automatic system/microphone input, left/right for visual directions, up/down for
 GPU presets, B for borderless, F11 for fullscreen, Tab for the overlay, and Escape to return or exit.
+Right-click the visual for sound zones, mode controls, palettes, materials, and scene controls.
 
 The bundled native plugin remains disabled until you review its path and SHA-256 identity and
 select Approve & Load. Native code runs with your user privileges and is not sandboxed.
@@ -104,8 +104,6 @@ a signed installer or a public release.
 
 $required = @(
     "thevisualizer.exe",
-    "presets\feedback-tunnel.tvpreset",
-    "presets\solar-bloom.tvpreset",
     "plugins\example.tvplugin",
     "plugins\thevisualizer_example_plugin.dll",
     "plugin-sdk\README.md",
@@ -117,6 +115,8 @@ $required = @(
     "README.txt",
     "LOCAL-TEST-NOTICE.txt"
 )
+$required += Get-ChildItem -LiteralPath (Join-Path $repoRoot "presets") -Filter "*.tvpreset" -File |
+    ForEach-Object { "presets\$($_.Name)" }
 foreach ($relativePath in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $stagePath $relativePath) -PathType Leaf)) {
         throw "Package is missing $relativePath."

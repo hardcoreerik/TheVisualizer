@@ -1,0 +1,133 @@
+//! format: 2
+//! id: thevisualizer.neon-horizon
+//! name: Neon Horizon
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.9
+//! parameter: Audio|bass-grid|Bass Grid|0.0|3.0|1.0
+//! parameter: Audio|treble-stars|Treble Stars|0.0|3.0|1.0
+//! parameter: Sun|sun-size|Sun Size|0.05|0.8|0.27
+//! parameter: Sun|sun-pulse|Sun Pulse|0.0|0.4|0.08
+//! parameter: Skyline|skyline-height|Skyline Height|0.0|1.0|0.38
+//! parameter: Skyline|tower-density|Tower Density|8.0|96.0|64.0
+//! parameter: Grid|grid-speed|Grid Speed|-4.0|4.0|1.0
+//! parameter: Grid|grid-depth|Grid Depth|0.05|0.6|0.22
+//! parameter: Sky|star-density|Star Density|0.0|1.0|0.55
+//! parameter: Camera|horizon|Horizon|-0.4|0.4|0.08
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms {
+    resolution: vec2f,
+    time: f32,
+    gain: f32,
+    audio: vec4f,
+}
+
+@group(0) @binding(0)
+var<uniform> uniforms: PresetUniforms;
+
+struct AudioFeatures {
+    waveform: array<f32, 256>,
+    spectrum: array<f32, 64>,
+}
+
+@group(0) @binding(1)
+var<storage, read> features: AudioFeatures;
+
+struct FrameExtras {
+    delta: f32,
+    peak: f32,
+    waveform_len: f32,
+    spectrum_len: f32,
+}
+
+@group(0) @binding(2)
+var<uniform> extras: FrameExtras;
+
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {
+    let positions = array(
+        vec2f(-1.0, -3.0),
+        vec2f(3.0, 1.0),
+        vec2f(-1.0, 1.0),
+    );
+    return vec4f(positions[vertex_index], 0.0, 1.0);
+}
+
+fn hash21(point: vec2f) -> f32 {
+    return fract(sin(dot(point, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    let uv = (position.xy * 2.0 - resolution) / resolution.y;
+    let gain = controls.values[0];
+    let low = clamp(uniforms.audio.x * gain, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * gain, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * gain, 0.0, 1.5);
+    let rms = clamp(uniforms.audio.w * gain * 3.0, 0.0, 1.5);
+
+    let horizon = controls.values[10] + scene.values[3] * 0.15;
+    let sky = clamp((horizon - uv.y) * 0.7, 0.0, 1.0);
+    var color = mix(vec3f(0.025, 0.004, 0.055), vec3f(0.002, 0.008, 0.025), sky);
+
+    let star_cell = floor((uv + vec2f(uniforms.time * 0.012, 0.0)) * 55.0);
+    let star = step(0.998 - controls.values[9] * 0.012 - high * controls.values[2] * 0.002, hash21(star_cell))
+        * step(uv.y, horizon - 0.05);
+    color += vec3f(0.25, 0.65, 1.0) * star * (0.25 + high * 0.8);
+
+    let sun_center = vec2f(0.0, -0.43);
+    let sun_point = uv - sun_center;
+    let sun_angle = atan2(sun_point.y, sun_point.x);
+    let wave_phase = fract(sun_angle / 6.28318 + 1.0);
+    let wave_index = min(u32(wave_phase * 256.0), 255u);
+    let wave = features.waveform[wave_index] * uniforms.gain;
+    let sun_radius = controls.values[3] + low * controls.values[4] + wave * 0.035;
+    let sun_distance = length(sun_point);
+    let sun_glow = 0.012 / max(abs(sun_distance - sun_radius), 0.004);
+    let sun_disc = 1.0 - smoothstep(sun_radius - 0.025, sun_radius, sun_distance);
+    let scanlines = 0.45 + 0.55 * step(
+        0.42,
+        fract((sun_point.y + uniforms.time * 0.025) * 42.0)
+    );
+    let sun_color = mix(vec3f(1.0, 0.12, 0.72), vec3f(1.0, 0.66, 0.08),
+        clamp((sun_point.y + 0.28) * 1.8, 0.0, 1.0));
+    color += sun_color * (sun_disc * scanlines * (0.22 + rms * 0.35) + sun_glow * 0.2);
+
+    let spectrum_phase = clamp(uv.x / 3.2 + 0.5, 0.0, 0.999);
+    let spectrum_index = min(u32(spectrum_phase * 64.0), 63u);
+    let local_spectrum = clamp(features.spectrum[spectrum_index] * gain, 0.0, 1.5);
+    let bar_cell = fract(spectrum_phase * controls.values[6]) - 0.5;
+    let bar_top = horizon - 0.045 - local_spectrum * controls.values[5];
+    let bar = (1.0 - step(0.39, abs(bar_cell)))
+        * step(bar_top, uv.y)
+        * (1.0 - step(horizon, uv.y));
+    color += mix(vec3f(1.0, 0.08, 0.72), vec3f(0.0, 0.95, 1.0), spectrum_phase)
+        * bar * (0.16 + local_spectrum * 0.75);
+
+    let ground = uv.y - horizon;
+    if ground > 0.0 {
+        let depth = controls.values[8] / max(ground, 0.015);
+        let lane = abs(fract(uv.x * depth * 0.55 + 0.5) - 0.5);
+        let row = abs(fract(depth - uniforms.time * controls.values[7]
+            * (0.45 + low * controls.values[1] * 0.55)) - 0.5);
+        let lane_glow = 0.012 / max(lane, 0.012);
+        let row_glow = 0.014 / max(row, 0.014);
+        let ground_fade = smoothstep(1.25, 0.02, ground);
+        color += vec3f(0.0, 0.72, 0.95) * lane_glow * ground_fade * 0.055;
+        color += vec3f(0.82, 0.05, 1.0) * row_glow * ground_fade
+            * (0.045 + mid * 0.025);
+    }
+
+    let horizon_glow = 0.008 / max(abs(uv.y - horizon), 0.006);
+    color += vec3f(0.9, 0.08, 0.82) * horizon_glow * (0.08 + extras.peak * 0.08);
+    color = 1.0 - exp(-color * controls.values[11] * (0.9 + rms * 1.4));
+    return vec4f(color, 1.0);
+}

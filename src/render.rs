@@ -12,6 +12,8 @@ use crate::analysis::{SPECTRUM_BANDS, WAVEFORM_POINTS};
 use crate::preset::Preset;
 
 const AUDIO_FEATURE_FLOATS: usize = WAVEFORM_POINTS + SPECTRUM_BANDS;
+pub const PRESET_SCENE_FLOATS: usize = 96;
+pub const PRESET_PARAMETER_FLOATS: usize = 40;
 
 #[derive(Clone, Copy)]
 pub struct PresetFrame<'a> {
@@ -25,6 +27,8 @@ pub struct PresetFrame<'a> {
     pub high: f32,
     pub rms: f32,
     pub peak: f32,
+    pub scene: &'a [f32],
+    pub parameters: &'a [f32],
 }
 
 impl PresetFrame<'_> {
@@ -59,6 +63,20 @@ impl PresetFrame<'_> {
             .copy_from_slice(&self.spectrum[..spectrum_len]);
         features
     }
+
+    fn scene_state(self) -> [f32; PRESET_SCENE_FLOATS] {
+        let mut scene = [0.0; PRESET_SCENE_FLOATS];
+        let length = self.scene.len().min(PRESET_SCENE_FLOATS);
+        scene[..length].copy_from_slice(&self.scene[..length]);
+        scene
+    }
+
+    fn parameter_state(self) -> [f32; PRESET_PARAMETER_FLOATS] {
+        let mut parameters = [0.0; PRESET_PARAMETER_FLOATS];
+        let length = self.parameters.len().min(PRESET_PARAMETER_FLOATS);
+        parameters[..length].copy_from_slice(&self.parameters[..length]);
+        parameters
+    }
 }
 
 pub struct GpuPresetRenderer {
@@ -68,20 +86,14 @@ pub struct GpuPresetRenderer {
 }
 
 impl GpuPresetRenderer {
-    pub fn install(
-        creation: &eframe::CreationContext<'_>,
-        preset: &Preset,
-    ) -> Result<Option<Self>, String> {
-        let Some(state) = creation.wgpu_render_state.as_ref() else {
-            return Ok(None);
-        };
+    pub fn install(state: &egui_wgpu::RenderState, preset: &Preset) -> Result<Self, String> {
         let resources = create_resources(state, preset)?;
         state.renderer.write().callback_resources.insert(resources);
-        Ok(Some(Self {
+        Ok(Self {
             adapter_name: state.adapter.get_info().name,
             state: state.clone(),
             active_id: preset.id.clone(),
-        }))
+        })
     }
 
     pub fn load(&mut self, preset: &Preset) -> Result<(), String> {
@@ -110,6 +122,8 @@ impl GpuPresetRenderer {
                 uniforms: frame.uniforms([1, 1]),
                 extras: frame.extras(),
                 audio_features: frame.audio_features(),
+                scene: frame.scene_state(),
+                parameters: frame.parameter_state(),
             },
         ));
     }
@@ -160,6 +174,30 @@ fn create_resources(
                 },
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(
+                        (PRESET_SCENE_FLOATS * size_of::<f32>()) as u64,
+                    ),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(
+                        (PRESET_PARAMETER_FLOATS * size_of::<f32>()) as u64,
+                    ),
+                },
+                count: None,
+            },
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -203,6 +241,16 @@ fn create_resources(
         contents: bytemuck::cast_slice(&[0.0_f32; 4]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
     });
+    let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("TheVisualizer preset scene buffer"),
+        contents: bytemuck::cast_slice(&[0.0_f32; PRESET_SCENE_FLOATS]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+    });
+    let parameter_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("TheVisualizer preset parameter buffer"),
+        contents: bytemuck::cast_slice(&[0.0_f32; PRESET_PARAMETER_FLOATS]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+    });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("TheVisualizer preset bind group"),
         layout: &bind_group_layout,
@@ -218,6 +266,14 @@ fn create_resources(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: extras_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: scene_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: parameter_buffer.as_entire_binding(),
             },
         ],
     });
@@ -235,6 +291,8 @@ fn create_resources(
         uniform_buffer,
         audio_buffer,
         extras_buffer,
+        scene_buffer,
+        parameter_buffer,
     })
 }
 
@@ -260,6 +318,8 @@ struct PresetCallback {
     uniforms: [f32; 8],
     extras: [f32; 4],
     audio_features: [f32; AUDIO_FEATURE_FLOATS],
+    scene: [f32; PRESET_SCENE_FLOATS],
+    parameters: [f32; PRESET_PARAMETER_FLOATS],
 }
 
 impl egui_wgpu::CallbackTrait for PresetCallback {
@@ -290,6 +350,16 @@ impl egui_wgpu::CallbackTrait for PresetCallback {
                 0,
                 bytemuck::cast_slice(&self.extras),
             );
+            queue.write_buffer(
+                &resources.scene_buffer,
+                0,
+                bytemuck::cast_slice(&self.scene),
+            );
+            queue.write_buffer(
+                &resources.parameter_buffer,
+                0,
+                bytemuck::cast_slice(&self.parameters),
+            );
         }
         Vec::new()
     }
@@ -314,6 +384,8 @@ struct PresetResources {
     uniform_buffer: wgpu::Buffer,
     audio_buffer: wgpu::Buffer,
     extras_buffer: wgpu::Buffer,
+    scene_buffer: wgpu::Buffer,
+    parameter_buffer: wgpu::Buffer,
 }
 
 #[cfg(test)]
@@ -333,6 +405,8 @@ mod tests {
             high: 5.0,
             rms: 6.0,
             peak: 0.9,
+            scene: &[7.0, 8.0],
+            parameters: &[9.0],
         };
         assert_eq!(
             frame.uniforms([1920, 1080]),
@@ -342,5 +416,7 @@ mod tests {
         let audio = frame.audio_features();
         assert_eq!(&audio[..3], &[0.25, -0.5, 0.0]);
         assert_eq!(audio[WAVEFORM_POINTS], 0.75);
+        assert_eq!(&frame.scene_state()[..3], &[7.0, 8.0, 0.0]);
+        assert_eq!(&frame.parameter_state()[..2], &[9.0, 0.0]);
     }
 }

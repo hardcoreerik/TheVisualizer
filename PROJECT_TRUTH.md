@@ -45,9 +45,17 @@ This document records verified project state. Planned behavior belongs in the [R
 - The particle visual maps low-to-high spectrum order into a radial spiral with a reactive core, frequency-color progression, connecting contours, and bounded motion trails.
 - A host-owned wgpu render pipeline, uniform buffer, and fullscreen-triangle callback for the WGSL visual.
 - A bounded host-owned GPU feature buffer supplies every WGSL preset with the same 256-point waveform and 64-band spectrum used by built-ins, while supplemental uniforms supply frame delta and peak alongside the original time, gain, RMS, and low/mid/high values.
-- Discovery of bounded single-file `.tvpreset` packages containing strict format, identity, author, license, response-parameter, and WGSL metadata.
+- Case-insensitive discovery of bounded single-file `.tvpreset` packages containing strict format, identity, author, license, response-parameter, and WGSL metadata.
 - Manual preset refresh and keyboard/dropdown selection. The host compiles replacements inside a wgpu validation scope and retains the last working pipeline when validation fails.
-- Two repository-owned WGSL presets: Feedback Tunnel and Solar Bloom.
+- Startup skips rejected preset shaders until one compiles, and refresh can initialize the GPU renderer after starting with no valid shader.
+- Eight repository-owned format-2 WGSL presets with 10–35 grouped controls: Aurora Flow, Feedback Tunnel, Gravity Wells, Kaleido Reactor, Neon Horizon, Ripple Garden, Solar Bloom, and TheVisualCityScape.
+- Shared interaction state for up to eight draggable sound zones, camera yaw/pitch/zoom, seven named palettes plus Custom, five material finishes, per-band colors, glow, gloss, and saturation.
+- Strict, bounded `.tvscene` save/discovery/restore for named host-owned views containing mode identity, forty finite parameter slots, routed colors/materials, camera, and up to eight zones. Missing presets and malformed, oversized, duplicate-key, non-finite, or out-of-range scene files fail visibly without executing code.
+- TheVisualCityScape starts with four pinned Bass/Mid/Treble/Full routes and exposes 35 controls across nine groups.
+- A visible, scrollable Instrument panel exposes live band meters, sound-zone editing, active-mode-only controls, routed colors/materials, gradient bars for glow/gloss/saturation, and camera controls. `I` toggles it.
+- Analysis now also measures spectral centroid, 85% spectral rolloff, spectral flatness, crest factor, and positive spectral flux.
+- A local Visual Director combines those measurements with a bounded 12-second energy/transient history to derive dynamics, onset density, movement, dominant band, and quiet/impact/building/receding/sustained passage state.
+- Ten creative controls and 17 capture choices drive structured subject/environment/era/event/scale/weather/composition/light candidates. Weighted history similarity prioritizes concept novelty over cosmetic variation; two or three plausible photographic imperfections, contextual cliché restraints, a deterministic preflight critique, and a generation-ready prompt follow. A versioned local brief history preserves generation metadata, prompts, and novelty records across app restarts; explicit Markdown export records the full brief, Visual DNA, and preflight scores. It makes no API request.
 - An optional `THEVISUALIZER_GPU` adapter-name override for focused compatibility checks.
 - An optional `THEVISUALIZER_PRESETS` directory override for focused discovery and packaging checks.
 - A shared size-tagged native-plugin ABI v1 with matching Rust definitions and a C header.
@@ -56,7 +64,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - One repository-owned Windows example plugin implementing initialize, synchronous feature processing, bounded response output, and shutdown without receiving audio ownership or GPU/window handles.
 - An optional `THEVISUALIZER_PLUGINS` directory override for focused discovery and packaging checks.
 - A guarded Windows x86_64 packaging script that builds the locked release workspace and stages a portable local-test archive under `dist`.
-- The portable package includes the player, both WGSL presets, the example-plugin manifest and DLL, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums.
+- The portable package script stages the player, all bundled WGSL presets, the example-plugin manifest and DLL, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums. The current eight-preset package has not yet been rebuilt and smoke-tested.
 - The staged plugin manifest uses a package-relative DLL path; no development-machine path is included in packaged text or manifests.
 - Apache-2.0 project licensing with a canonical `LICENSE`, contributor `NOTICE`, manifest metadata, and a recorded compatibility/provenance policy.
 - A fail-closed Windows license collector inventories the locked target graph, copies crate-provided files, and uses exact Cargo-pinned upstream sources when crates omit them. Its sole canonical-text fallback is CC0-1.0 from SPDX license-list-data v3.26.0 for `hexf-parse`.
@@ -67,12 +75,12 @@ This document records verified project state. Planned behavior belongs in the [R
 - A repository-owned SVG waveform mark, derived PNG, and embedded native application/window icon. The running app does not depend on an external icon file.
 - Display-synchronized, 60 FPS, and 30 FPS host-side frame pacing selectable beside the measured application cadence in the details disclosure.
 - Visible `1 Scope`, `2 Particles`, and `3 Preset` controls with matching number-key selection, Left/Right cycling, and a portable ASCII shortcut footer.
-- Eighteen focused automated tests across the workspace covering analysis, callback-sequence gating, quiet-state guidance, frame pacing, direct visual shortcuts, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, presentation, presets, the WGSL scalar and waveform/spectrum buffer contract, strict plugin manifests, changed-artifact rejection, ABI sizes, and the example-plugin lifecycle.
+- Twenty-eight focused automated tests across the workspace covering analysis, callback-sequence gating, quiet-state guidance, frame pacing, direct visual shortcuts, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, interaction/color bounds, presentation, presets, strict saved-scene round-trip and bounds, Visual Director rolling history, structured novelty, durable brief-history reload, capture/output planning, the WGSL scalar/feature/scene/parameter buffer contract, strict plugin manifests, ABI sizes, and the example-plugin lifecycle.
 
 ## Runtime-observed results
 
 - `cargo check --workspace` completed successfully on 2026-07-27.
-- `cargo test --workspace` passed 18 tests with 0 failures on 2026-07-27.
+- `cargo test --workspace` passed 28 tests with 0 failures on 2026-07-27.
 - `cargo clippy --workspace -- -D warnings` completed successfully on 2026-07-27.
 - After the same-ID recovery change, the rebuilt debug application opened automatic system capture and local Windows system sounds produced `LIVE`, nonzero RMS/peak values, and visible neon trails.
 - The debug application launched and rendered at 1280×720 on the Windows development host.
@@ -112,6 +120,8 @@ This document records verified project state. Planned behavior belongs in the [R
 - After the shared GPU feature path was completed, Feedback Tunnel compiled and used angle-mapped spectrum values while Solar Bloom compiled and used angle-mapped waveform and spectrum values. Repeated Windows system sounds produced `LIVE`, nonzero levels, and visibly asymmetric frequency/waveform-driven contours in both presets. Solar Bloom also rendered fullscreen at 3440×1440; its quiet steady-state application cadence returned to about 175 FPS windowed and measured about 173 FPS fullscreen on the NVIDIA adapter.
 - Windows system sounds drove Solar Bloom while the overlay reported `LIVE` with nonzero RMS and peak values.
 - A deliberately invalid WGSL preset produced a concise validation error while Solar Bloom remained rendered and usable. Removing the temporary file and refreshing cleared the error; the invalid probe was not retained in the repository.
+- With a deliberately invalid WGSL preset sorted before both bundled presets, the rebuilt player reported the rejection, initialized Feedback Tunnel instead, and rendered it with live system audio. The temporary probe was removed afterward.
+- In a separate probe that started with no valid shader, adding Feedback Tunnel and selecting preset refresh initialized the GPU renderer without restarting the app; live system audio then drove the recovered preset. The temporary directory was removed afterward.
 - The example plugin was discovered with `DISABLED` status before any approval, with its identity, library path, version, author, license, truncated SHA-256 digest, and explicit no-sandbox warning visible.
 - Selecting `Approve & Load` initialized the example plugin. Live system audio changed its bounded response multiplier while the host-owned Feedback Tunnel continued rendering.
 - Selecting `Unload` returned the plugin to `DISABLED`; the example lifecycle test independently verified that processing fails before initialization and after shutdown.
@@ -138,15 +148,30 @@ This document records verified project state. Planned behavior belongs in the [R
 - The rebuilt same-ID recovery package launched in automatic system mode; local Windows system sounds produced `LIVE`, nonzero RMS/peak values, and visible neon trails.
 - The official MDN T-Rex audio sample reported active playback in a controlled browser transport, but that transport did not route audio to the captured Windows endpoint; an immediate local Windows system-sound control confirmed loopback remained healthy.
 - A separate installed Chrome 150 instance used an isolated disposable profile and a local Web Audio page whose analyzer reported a running 48,000 Hz signal at approximately 0.050 RMS. Before Chrome started, the packaged player reported `WAITING` with zero levels. It then reported `LIVE` at approximately 0.049 RMS / 0.095 peak while the browser signal visibly drove Neon Scope, Particle Array, and Feedback Tunnel without reopening capture. Stopping only that Chrome instance returned the same stream to `SILENT` and zero levels.
+- Fresh preset discovery accepted all eight bundled format-2 packages and the metadata test verified that each has 10–40 finite controls; TheVisualCityScape has 35.
+- On the NVIDIA GeForce RTX 5070 Ti, all eight current WGSL presets compiled through the live player without a visible shader error. Aurora Flow, Gravity Wells, Kaleido Reactor, Neon Horizon, Ripple Garden, Solar Bloom, and TheVisualCityScape were visually inspected while system capture reported live or changing nonzero levels; the upgraded Feedback Tunnel also rendered during a short waiting/live transition.
+- TheVisualCityScape visibly rendered a procedural skyline, windows, road/traffic field, crowd particles, rooftop/sky activity, a moon/portal, and four labeled audio zones. Dragging empty scene space changed the cylindrical camera yaw. The right-click menu exposed Mode, Sound Zones, Mode Controls, Color & Material, and Scene, and its CityScape Mode Controls exposed all nine documented groups.
+- The Color & Material submenu exposed separate Full Range, Bass, Mid, Treble, and Background color controls plus palette, finish, glow, gloss, and saturation controls.
+- The visible `Instrument [I]` panel was inspected with TheVisualCityScape active. It showed live Full/Bass/Mid/Treble routing meters, all four default zones, the active preset's nine control groups, independent band colors, material controls, and camera controls. Clicking the Glow gradient changed its value from 1.00 to 0.36 and visibly reduced the rendered scene glow without closing the panel.
+- The rebuilt Instrument panel exposed Preview/Final intent, four aspect choices, Auto plus 16 capture profiles, and ten creative sliders. With Neon Scope and live system audio active, the richer director visibly reported passage, dominant band, nine numeric DNA dimensions, structured concepts such as “a crowded amateur orchestra during a failed rehearsal at a desert truck stop,” and an inspectable prompt.
+- The initial structured-DNA row and prompt editor caused the resizable Instrument panel to spread across the visual during live inspection. The grid was corrected to two measurements per row and the panel/content width was bounded. A rebuilt run kept the complete composed brief inside a roughly 500-pixel contextual side panel while live visualization remained visible.
+- Expanding Preflight critique in the running app displayed the concept-novelty meter; the same panel also supplies physical-plausibility and AI-cliché-risk meters plus construction notes.
+- At the 800×500 minimum content size (816×539 decorated window), the composed Visual Director remained scrollable, its two-column DNA values and preflight meter stayed inside the bounded side panel, and the underlying live visual remained partially visible. The window was then restored to the 3440×1440 working viewport.
+- In a rebuilt live run, composing a Neon Scope brief created `%LOCALAPPDATA%\TheVisualizer\visual-director-history.tsv` with the version-1 header and one encoded metadata/prompt record. Markdown export and restart-based novelty seeding were exercised by the focused filesystem test; the export button itself was not clicked during live inspection.
+- In a rebuilt live run with an isolated `THEVISUALIZER_SCENES` directory, entering the full name `Live Bass View` did not fire the global `B`, `S`, or `I` shortcuts while the text field owned keyboard input. Saving created one 401-byte `.tvscene`; restart discovery reported `Saved Scenes · 1`. After switching to Particle Forge, Restore returned to Neon Scope, restored the saved zero-zone state, and displayed `Restored scene · Live Bass View · Neon Scope`.
+- The zone overlay was rebuilt without enclosing radius circles. In the rebuilt live Neon Scope view, the selected zone appeared as a compact diamond anchor with four audio-reactive range ticks and one adjacent label while the visual remained unobscured.
 
 ## Not implemented or runtime-verified
 
 - Runtime validation of no-default device removal and later same-ID recovery
 - Externally timestamped playback-to-display latency
-- Beat or onset detection
+- Tempo/beat tracking or BPM estimation; current onset density is a transient-threshold heuristic rather than a beat tracker
 - Explicit multi-monitor selection
 - Rendering on the currently disabled AMD integrated GPU and minimum hardware/driver validation
-- Automatic preset-directory watching, an editor, additional parameter types, or remote preset delivery
+- Automatic preset-directory watching, a preset/editor workflow, non-slider parameter types, scene rename/delete/share UX, or remote preset delivery
+- True polygonal 3D city geometry, downloaded city imagery, recognizable landmark assets, or generated-image scene packs
+- OpenAI or other image-provider requests, image response decoding, saved generated-image history, reference-image editing, automated critique/revision, and generated-asset ingestion
+- A fresh package build and extracted-package smoke test containing all eight current presets
 - Persistent approval records, signed-plugin infrastructure, or cross-process crash isolation
 - A clean-machine package run, installer, updater, signing, signed executable metadata/resource icon, public distribution, or formal installed-program uninstall
 - macOS or Linux builds and capture backends

@@ -1,0 +1,91 @@
+//! format: 2
+//! id: thevisualizer.kaleido-reactor
+//! name: Kaleido Reactor
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-core|Bass Core|0.0|3.0|1.4
+//! parameter: Audio|treble-facets|Treble Facets|0.0|3.0|1.25
+//! parameter: Symmetry|segments|Segments|3.0|24.0|10.0
+//! parameter: Symmetry|fold|Fold Strength|0.0|3.0|1.0
+//! parameter: Reactor|core-size|Core Size|0.03|0.8|0.22
+//! parameter: Reactor|ring-count|Ring Count|2.0|20.0|9.0
+//! parameter: Reactor|spin|Spin|-4.0|4.0|0.45
+//! parameter: Reactor|feedback|Feedback|0.0|2.0|0.65
+//! parameter: Surface|facet-glow|Facet Glow|0.0|3.0|1.4
+//! parameter: Camera|zoom-pulse|Zoom Pulse|0.0|1.0|0.2
+//! parameter: Scene|seed|Seed|0.0|999.0|19.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let vertices = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(vertices[index], 0.0, 1.0);
+}
+
+fn routed(offset: u32) -> vec3f {
+    return vec3f(scene.values[offset], scene.values[offset + 1u], scene.values[offset + 2u]);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    let aspect = resolution.x / resolution.y;
+    var uv = (position.xy * 2.0 - resolution) / resolution.y;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    uv /= max(scene.values[4] * (1.0 + bass * controls.values[10] * 0.05), 0.35);
+
+    var zone_warp = vec2f(0.0);
+    for (var index = 0u; index < 8u; index += 1u) {
+        if f32(index) < scene.values[0] {
+            let offset = 8u + index * 8u;
+            let center = vec2f(
+                (scene.values[offset] * 2.0 - 1.0) * aspect,
+                scene.values[offset + 1u] * 2.0 - 1.0
+            );
+            let delta = uv - center;
+            let energy = scene.values[offset + 3u] * scene.values[offset + 6u];
+            zone_warp += normalize(delta + vec2f(0.001)) * exp(-length(delta) * 4.0)
+                * energy * controls.values[4] * 0.12;
+        }
+    }
+    uv += zone_warp;
+
+    let segments = floor(controls.values[3] + 0.5);
+    let spin = uniforms.time * controls.values[7] + scene.values[2];
+    let raw_angle = atan2(uv.y, uv.x) + spin;
+    let wedge = 6.28318 / segments;
+    let folded = abs(fract(raw_angle / wedge + 0.5) - 0.5) * wedge;
+    let radius = length(uv);
+    let sample_phase = fract(folded / wedge + radius * 0.18);
+    let sample_index = min(u32(sample_phase * 64.0), 63u);
+    let spectrum = clamp(features.spectrum[sample_index] * response, 0.0, 1.5);
+    let core_size = controls.values[5] * (1.0 + bass * controls.values[1] * 0.1);
+    let core = 0.012 / max(abs(radius - core_size), 0.006);
+    let rings = sin(radius * controls.values[6] * 6.28318
+        - uniforms.time * controls.values[8] + folded * controls.values[4] * 8.0);
+    let facets = pow(max(0.0, cos(folded * segments)), 10.0)
+        * exp(-radius * 0.55) * (0.2 + high * controls.values[2]);
+    let reactor = exp(-abs(rings - spectrum * 0.4) * 5.0);
+
+    var color = routed(88u) * 0.5;
+    color += mix(routed(76u), routed(80u), clamp(radius, 0.0, 1.0))
+        * reactor * (0.08 + spectrum * 0.5);
+    color += routed(84u) * facets * controls.values[9] * 0.35;
+    color += routed(72u) * core * (0.08 + bass * 0.18);
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * (0.8 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

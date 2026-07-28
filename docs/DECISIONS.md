@@ -99,3 +99,9 @@ These are project decisions, not verified implementation results. Supersede deci
 **Decision:** Follow the presentation cadence by default and offer optional 60 FPS and 30 FPS host-side limits in the technical disclosure.
 
 **Rationale:** High-refresh displays preserve maximum fluidity by default, while explicit lower limits give users a direct cadence/CPU tradeoff without changing capture, analysis, preset, or plugin contracts. Measured application cadence remains visible; process CPU measurements do not substitute for later GPU board-power, thermal, or battery validation.
+
+## D-017 — Host-owned saved scenes
+
+**Decision:** Persist named creative views in a new bounded `.tvscene` value format rather than modifying `.tvpreset` packages or serializing renderer internals.
+
+**Rationale:** A user should be able to return to tuned sliders, colors, materials, zones, and camera state across launches. Keeping snapshots host-owned preserves immutable preset provenance, works for both built-in and WGSL modes, and prevents a saved view from gaining shader or native-code execution.

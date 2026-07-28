@@ -1,0 +1,95 @@
+//! format: 2
+//! id: thevisualizer.aurora-flow
+//! name: Aurora Flow
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.7
+//! parameter: Audio|bass-lift|Bass Lift|0.0|3.0|1.1
+//! parameter: Audio|treble-shimmer|Treble Shimmer|0.0|3.0|1.4
+//! parameter: Ribbons|ribbon-count|Ribbon Count|1.0|12.0|5.0
+//! parameter: Ribbons|ribbon-width|Ribbon Width|0.01|0.4|0.12
+//! parameter: Ribbons|flow-speed|Flow Speed|-4.0|4.0|0.55
+//! parameter: Ribbons|turbulence|Turbulence|0.0|3.0|0.85
+//! parameter: Sky|star-density|Star Density|0.0|1.0|0.55
+//! parameter: Sky|horizon-glow|Horizon Glow|0.0|3.0|0.8
+//! parameter: Surface|shimmer|Shimmer|0.0|3.0|1.2
+//! parameter: Camera|drift|Camera Drift|-2.0|2.0|0.05
+//! parameter: Scene|seed|Seed|0.0|999.0|67.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let vertices = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(vertices[index], 0.0, 1.0);
+}
+
+fn hash21(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+fn routed(offset: u32) -> vec3f {
+    return vec3f(scene.values[offset], scene.values[offset + 1u], scene.values[offset + 2u]);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    let aspect = resolution.x / resolution.y;
+    var uv = (position.xy * 2.0 - resolution) / resolution.y;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    uv.x += scene.values[2] + uniforms.time * controls.values[10];
+    uv.y += scene.values[3] * 0.25;
+    uv /= max(scene.values[4], 0.35);
+
+    var zone_flow = 0.0;
+    for (var index = 0u; index < 8u; index += 1u) {
+        if f32(index) < scene.values[0] {
+            let offset = 8u + index * 8u;
+            let center = vec2f(
+                (scene.values[offset] * 2.0 - 1.0) * aspect,
+                scene.values[offset + 1u] * 2.0 - 1.0
+            );
+            let energy = scene.values[offset + 3u] * scene.values[offset + 6u];
+            zone_flow += sin(length(uv - center) * 8.0 - uniforms.time * 2.0)
+                * exp(-length(uv - center) * 2.5) * energy;
+        }
+    }
+
+    let count = floor(controls.values[3] + 0.5);
+    let flow = sin(uv.x * (1.2 + controls.values[6])
+        + uniforms.time * controls.values[5] + zone_flow);
+    let folded_y = fract((uv.y + flow * 0.2 + 1.5) * count * 0.5) - 0.5;
+    let wave_phase = fract(uv.x / max(aspect * 2.0, 0.01) + 0.5);
+    let wave_index = min(u32(wave_phase * 256.0), 255u);
+    let waveform = features.waveform[wave_index] * response;
+    let ribbon_distance = abs(folded_y - waveform * 0.15
+        - bass * controls.values[1] * 0.025);
+    let ribbon = exp(-ribbon_distance / max(controls.values[4], 0.01));
+    let shimmer = pow(abs(sin(uv.x * 28.0 + uniforms.time * 3.0 + flow)), 12.0)
+        * high * controls.values[2] * controls.values[9];
+    let star_cell = floor(vec2f(uv.x, uv.y + uniforms.time * 0.01) * 55.0);
+    let stars = step(0.995 - controls.values[7] * 0.012, hash21(star_cell + controls.values[11]));
+    let horizon = exp(-abs(uv.y - 0.72) * 5.0) * controls.values[8];
+
+    var color = routed(88u) * mix(0.25, 0.8, clamp(uv.y + 0.5, 0.0, 1.0));
+    color += mix(routed(80u), routed(84u), 0.5 + flow * 0.45)
+        * ribbon * (0.12 + high * 0.35);
+    color += routed(72u) * shimmer * 0.35;
+    color += routed(84u) * stars * (0.15 + high);
+    color += routed(76u) * horizon * (0.08 + bass * 0.15);
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * (0.9 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

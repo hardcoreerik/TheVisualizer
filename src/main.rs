@@ -3,6 +3,8 @@ mod audio;
 mod plugin;
 mod preset;
 mod render;
+mod scene;
+mod visual_director;
 
 use std::{
     collections::VecDeque,
@@ -14,14 +16,371 @@ use std::{
 use analysis::{Analyzer, FFT_SIZE, Features};
 use audio::{AudioCapture, AudioDevice, SampleBuffer, SharedSamples, SourceKind};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
+use eframe::egui_wgpu::RenderState;
 use plugin::{LoadedPlugin, PluginPackage};
 use preset::Preset;
-use render::{GpuPresetRenderer, PresetFrame};
+use render::{GpuPresetRenderer, PRESET_PARAMETER_FLOATS, PRESET_SCENE_FLOATS, PresetFrame};
+use scene::{SavedScene, SceneSnapshot, SceneZone};
+use visual_director::{Aspect, CaptureProfile, OutputIntent, VisualDirector};
 
 const VISUAL_NAMES: [&str; 3] = ["NEON SCOPE", "PARTICLE ARRAY", "GPU PRESET"];
 const VISUAL_BUTTONS: [&str; 3] = ["1 Scope", "2 Particles", "3 Preset"];
 const DEFAULT_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const VISUAL_TRAIL_FRAMES: usize = 10;
+const MAX_SOUND_ZONES: usize = 8;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ZoneBand {
+    Full,
+    Low,
+    Mid,
+    High,
+}
+
+impl ZoneBand {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Full => "Full",
+            Self::Low => "Low",
+            Self::Mid => "Mid",
+            Self::High => "High",
+        }
+    }
+
+    fn energy(self, features: &Features) -> f32 {
+        match self {
+            Self::Full => features.rms * 3.0,
+            Self::Low => features.low,
+            Self::Mid => features.mid,
+            Self::High => features.high,
+        }
+        .clamp(0.0, 1.0)
+    }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Full => 0,
+            Self::Low => 1,
+            Self::Mid => 2,
+            Self::High => 3,
+        }
+    }
+
+    fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Low,
+            2 => Self::Mid,
+            3 => Self::High,
+            _ => Self::Full,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SoundZone {
+    position: Vec2,
+    radius: f32,
+    strength: f32,
+    band: ZoneBand,
+    pinned: bool,
+}
+
+impl SoundZone {
+    fn new(position: Vec2) -> Self {
+        Self {
+            position,
+            radius: 0.16,
+            strength: 1.0,
+            band: ZoneBand::Full,
+            pinned: false,
+        }
+    }
+}
+
+struct InteractionState {
+    zones: Vec<SoundZone>,
+    selected: Option<usize>,
+    drag_origin: Option<Vec2>,
+    camera_drag_origin: Option<Vec2>,
+    camera_yaw: f32,
+    camera_pitch: f32,
+    camera_zoom: f32,
+    show_handles: bool,
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self {
+            zones: vec![SoundZone::new(Vec2::new(0.5, 0.5))],
+            selected: Some(0),
+            drag_origin: None,
+            camera_drag_origin: None,
+            camera_yaw: 0.0,
+            camera_pitch: 0.05,
+            camera_zoom: 1.0,
+            show_handles: true,
+        }
+    }
+}
+
+impl InteractionState {
+    fn cityscape() -> Self {
+        Self {
+            zones: vec![
+                SoundZone {
+                    position: Vec2::new(0.3, 0.48),
+                    radius: 0.18,
+                    strength: 1.35,
+                    band: ZoneBand::Low,
+                    pinned: true,
+                },
+                SoundZone {
+                    position: Vec2::new(0.5, 0.76),
+                    radius: 0.2,
+                    strength: 1.2,
+                    band: ZoneBand::Mid,
+                    pinned: true,
+                },
+                SoundZone {
+                    position: Vec2::new(0.62, 0.32),
+                    radius: 0.16,
+                    strength: 1.25,
+                    band: ZoneBand::High,
+                    pinned: true,
+                },
+                SoundZone {
+                    position: Vec2::new(0.78, 0.2),
+                    radius: 0.22,
+                    strength: 1.0,
+                    band: ZoneBand::Full,
+                    pinned: true,
+                },
+            ],
+            selected: Some(3),
+            drag_origin: None,
+            camera_drag_origin: None,
+            camera_yaw: 0.0,
+            camera_pitch: 0.05,
+            camera_zoom: 1.0,
+            show_handles: true,
+        }
+    }
+
+    fn add_zone(&mut self, position: Vec2) {
+        if self.zones.len() == MAX_SOUND_ZONES {
+            return;
+        }
+        self.zones.push(SoundZone::new(position));
+        self.selected = Some(self.zones.len() - 1);
+    }
+
+    fn remove_selected(&mut self) {
+        let Some(index) = self.selected else {
+            return;
+        };
+        if self.zones.get(index).is_some_and(|zone| zone.pinned) {
+            return;
+        }
+        self.zones.remove(index);
+        self.selected = (!self.zones.is_empty()).then(|| index.min(self.zones.len() - 1));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PalettePreset {
+    CyberNeon,
+    Earth,
+    Arctic,
+    Inferno,
+    Acid,
+    Vaporwave,
+    Monochrome,
+    Custom,
+}
+
+impl PalettePreset {
+    const ALL: [Self; 8] = [
+        Self::CyberNeon,
+        Self::Earth,
+        Self::Arctic,
+        Self::Inferno,
+        Self::Acid,
+        Self::Vaporwave,
+        Self::Monochrome,
+        Self::Custom,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::CyberNeon => "Cyber Neon",
+            Self::Earth => "Earth Tones",
+            Self::Arctic => "Arctic Glass",
+            Self::Inferno => "Inferno",
+            Self::Acid => "Acid",
+            Self::Vaporwave => "Vaporwave",
+            Self::Monochrome => "Monochrome",
+            Self::Custom => "Custom",
+        }
+    }
+
+    fn code(self) -> u8 {
+        self as u8
+    }
+
+    fn from_code(code: u8) -> Self {
+        Self::ALL[usize::from(code.min(Self::ALL.len() as u8 - 1))]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SurfaceFinish {
+    Neon,
+    Glossy,
+    Matte,
+    Metallic,
+    Glass,
+}
+
+impl SurfaceFinish {
+    const ALL: [Self; 5] = [
+        Self::Neon,
+        Self::Glossy,
+        Self::Matte,
+        Self::Metallic,
+        Self::Glass,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Neon => "Neon",
+            Self::Glossy => "Glossy",
+            Self::Matte => "Matte",
+            Self::Metallic => "Metallic",
+            Self::Glass => "Glass",
+        }
+    }
+
+    fn code(self) -> u8 {
+        self as u8
+    }
+
+    fn from_code(code: u8) -> Self {
+        Self::ALL[usize::from(code.min(Self::ALL.len() as u8 - 1))]
+    }
+}
+
+struct ColorSystem {
+    palette: PalettePreset,
+    finish: SurfaceFinish,
+    full: Color32,
+    bass: Color32,
+    mid: Color32,
+    treble: Color32,
+    background: Color32,
+    glow: f32,
+    gloss: f32,
+    saturation: f32,
+}
+
+impl Default for ColorSystem {
+    fn default() -> Self {
+        let mut colors = Self {
+            palette: PalettePreset::CyberNeon,
+            finish: SurfaceFinish::Neon,
+            full: Color32::WHITE,
+            bass: Color32::WHITE,
+            mid: Color32::WHITE,
+            treble: Color32::WHITE,
+            background: Color32::BLACK,
+            glow: 1.0,
+            gloss: 0.7,
+            saturation: 1.0,
+        };
+        colors.apply_palette(PalettePreset::CyberNeon);
+        colors
+    }
+}
+
+impl ColorSystem {
+    fn apply_palette(&mut self, palette: PalettePreset) {
+        self.palette = palette;
+        let colors = match palette {
+            PalettePreset::CyberNeon => [
+                Color32::from_rgb(225, 245, 255),
+                Color32::from_rgb(255, 45, 105),
+                Color32::from_rgb(0, 245, 190),
+                Color32::from_rgb(65, 120, 255),
+                Color32::from_rgb(2, 5, 18),
+            ],
+            PalettePreset::Earth => [
+                Color32::from_rgb(235, 220, 175),
+                Color32::from_rgb(155, 55, 30),
+                Color32::from_rgb(90, 145, 70),
+                Color32::from_rgb(215, 165, 75),
+                Color32::from_rgb(20, 16, 12),
+            ],
+            PalettePreset::Arctic => [
+                Color32::from_rgb(235, 255, 255),
+                Color32::from_rgb(40, 145, 210),
+                Color32::from_rgb(105, 245, 235),
+                Color32::from_rgb(175, 205, 255),
+                Color32::from_rgb(3, 15, 25),
+            ],
+            PalettePreset::Inferno => [
+                Color32::from_rgb(255, 235, 175),
+                Color32::from_rgb(255, 35, 15),
+                Color32::from_rgb(255, 115, 15),
+                Color32::from_rgb(255, 220, 75),
+                Color32::from_rgb(18, 2, 1),
+            ],
+            PalettePreset::Acid => [
+                Color32::from_rgb(235, 255, 120),
+                Color32::from_rgb(180, 255, 0),
+                Color32::from_rgb(15, 255, 105),
+                Color32::from_rgb(210, 35, 255),
+                Color32::from_rgb(5, 10, 2),
+            ],
+            PalettePreset::Vaporwave => [
+                Color32::from_rgb(255, 225, 255),
+                Color32::from_rgb(255, 75, 185),
+                Color32::from_rgb(130, 95, 255),
+                Color32::from_rgb(40, 225, 255),
+                Color32::from_rgb(16, 5, 35),
+            ],
+            PalettePreset::Monochrome => [
+                Color32::from_rgb(245, 245, 245),
+                Color32::from_rgb(205, 205, 205),
+                Color32::from_rgb(150, 150, 150),
+                Color32::from_rgb(235, 235, 235),
+                Color32::from_rgb(6, 6, 8),
+            ],
+            PalettePreset::Custom => return,
+        };
+        [self.full, self.bass, self.mid, self.treble, self.background] = colors;
+    }
+
+    fn band_color(&self, band: ZoneBand) -> Color32 {
+        match band {
+            ZoneBand::Full => self.full,
+            ZoneBand::Low => self.bass,
+            ZoneBand::Mid => self.mid,
+            ZoneBand::High => self.treble,
+        }
+    }
+
+    fn spectrum_color(&self, frequency: f32) -> Color32 {
+        let (from, to, amount) = if frequency < 0.55 {
+            (self.bass, self.mid, frequency / 0.55)
+        } else {
+            (self.mid, self.treble, (frequency - 0.55) / 0.45)
+        };
+        Color32::from_rgb(
+            egui::lerp(from.r() as f32..=to.r() as f32, amount) as u8,
+            egui::lerp(from.g() as f32..=to.g() as f32, amount) as u8,
+            egui::lerp(from.b() as f32..=to.b() as f32, amount) as u8,
+        )
+    }
+}
 
 #[derive(Default)]
 struct LatencyStats {
@@ -259,12 +618,16 @@ struct VisualizerApp {
     last_analyzed_callback_sequence: u64,
     features: Features,
     visual_history: VisualHistory,
+    interaction: InteractionState,
+    colors: ColorSystem,
+    mode_parameters: [f32; PRESET_PARAMETER_FLOATS],
     latency: LatencyStats,
     frame_stats: FrameStats,
     default_switch_timing: Option<DefaultSwitchTiming>,
     pending_default_switch: Option<Instant>,
     visual: usize,
     overlay: bool,
+    instrument_panel: bool,
     presentation: PresentationMode,
     frame_limit: FrameLimit,
     last_paced_frame: Instant,
@@ -273,6 +636,7 @@ struct VisualizerApp {
     presets: Vec<Preset>,
     preset_directory: PathBuf,
     preset_error: Option<String>,
+    gpu_state: Option<RenderState>,
     gpu_preset: Option<GpuPresetRenderer>,
     plugins: Vec<PluginPackage>,
     plugin_directory: PathBuf,
@@ -281,6 +645,13 @@ struct VisualizerApp {
     plugin_error: Option<String>,
     plugin_multiplier: f32,
     last_plugin_frame: Instant,
+    cityscape_initialized: bool,
+    visual_director: VisualDirector,
+    scene_directory: PathBuf,
+    scenes: Vec<SavedScene>,
+    selected_scene: usize,
+    scene_name: String,
+    scene_notice: Option<String>,
 }
 
 impl VisualizerApp {
@@ -292,24 +663,38 @@ impl VisualizerApp {
         creation.egui_ctx.set_visuals(visuals);
         let preset_directory = preset_directory();
         let discovery = preset::discover(&preset_directory);
-        let mut preset_error = (!discovery.errors.is_empty()).then(|| discovery.errors.join("\n"));
-        let gpu_preset = discovery.presets.first().and_then(|preset| {
-            match GpuPresetRenderer::install(creation, preset) {
-                Ok(renderer) => renderer,
-                Err(error) => {
-                    preset_error = Some(error);
-                    None
+        let mut preset_errors = discovery.errors;
+        let gpu_state = creation.wgpu_render_state.clone();
+        let mut gpu_preset = None;
+        if let Some(state) = &gpu_state {
+            for preset in &discovery.presets {
+                match GpuPresetRenderer::install(state, preset) {
+                    Ok(renderer) => {
+                        gpu_preset = Some(renderer);
+                        break;
+                    }
+                    Err(error) => preset_errors.push(error),
                 }
             }
+        }
+        let preset_error = (!preset_errors.is_empty()).then(|| preset_errors.join("\n"));
+        let active_preset = gpu_preset.as_ref().and_then(|renderer| {
+            discovery
+                .presets
+                .iter()
+                .find(|preset| preset.id == renderer.active_id())
         });
-        let gain = discovery
-            .presets
-            .first()
-            .map_or(2.2, |preset| preset.response.default);
+        let gain = active_preset.map_or(2.2, |preset| preset.response.default);
+        let mode_parameters =
+            active_preset.map_or([0.0; PRESET_PARAMETER_FLOATS], preset_parameter_defaults);
         let plugin_directory = plugin_directory();
         let plugin_discovery = plugin::discover(&plugin_directory);
         let plugin_error =
             (!plugin_discovery.errors.is_empty()).then(|| plugin_discovery.errors.join("\n"));
+        let scene_directory = scene::default_directory();
+        let scene_discovery = scene::discover(&scene_directory);
+        let scene_notice =
+            (!scene_discovery.errors.is_empty()).then(|| scene_discovery.errors.join("\n"));
         let started = Instant::now();
 
         let samples = Arc::new(Mutex::new(SampleBuffer::default()));
@@ -345,12 +730,16 @@ impl VisualizerApp {
             last_analyzed_callback_sequence: 0,
             features: Features::default(),
             visual_history: VisualHistory::default(),
+            interaction: InteractionState::default(),
+            colors: ColorSystem::default(),
+            mode_parameters,
             latency: LatencyStats::default(),
             frame_stats: FrameStats::default(),
             default_switch_timing: None,
             pending_default_switch: None,
             visual: 0,
             overlay: true,
+            instrument_panel: false,
             presentation: PresentationMode::Windowed,
             frame_limit: FrameLimit::Display,
             last_paced_frame: started,
@@ -359,6 +748,7 @@ impl VisualizerApp {
             presets: discovery.presets,
             preset_directory,
             preset_error,
+            gpu_state,
             gpu_preset,
             plugins: plugin_discovery.packages,
             plugin_directory,
@@ -367,6 +757,13 @@ impl VisualizerApp {
             plugin_error,
             plugin_multiplier: 1.0,
             last_plugin_frame: started,
+            cityscape_initialized: false,
+            visual_director: VisualDirector::with_default_history(),
+            scene_directory,
+            scenes: scene_discovery.scenes,
+            selected_scene: 0,
+            scene_name: String::new(),
+            scene_notice,
         };
         app.refresh_devices();
         app
@@ -495,6 +892,7 @@ impl VisualizerApp {
             return;
         }
         self.features = self.analyzer.analyze(&snapshot.samples, sample_rate);
+        self.visual_director.observe(&self.features, Instant::now());
         self.visual_history
             .update(snapshot.callback_sequence, &self.features);
         if let Some(timing) = &mut self.default_switch_timing {
@@ -513,13 +911,23 @@ impl VisualizerApp {
         let Some(preset) = self.presets.get(index).cloned() else {
             return;
         };
-        let Some(renderer) = &mut self.gpu_preset else {
-            self.preset_error = Some("GPU preset renderer is unavailable".to_owned());
-            return;
+        let result = if let Some(renderer) = &mut self.gpu_preset {
+            renderer.load(&preset)
+        } else if let Some(state) = &self.gpu_state {
+            GpuPresetRenderer::install(state, &preset).map(|renderer| {
+                self.gpu_preset = Some(renderer);
+            })
+        } else {
+            Err("GPU preset renderer is unavailable".to_owned())
         };
-        match renderer.load(&preset) {
+        match result {
             Ok(()) => {
                 self.gain = preset.response.default;
+                self.mode_parameters = preset_parameter_defaults(&preset);
+                if preset.id == "thevisualizer.cityscape" && !self.cityscape_initialized {
+                    self.interaction = InteractionState::cityscape();
+                    self.cityscape_initialized = true;
+                }
                 self.preset_error = None;
             }
             Err(error) => self.preset_error = Some(error),
@@ -535,13 +943,28 @@ impl VisualizerApp {
         self.presets = discovery.presets;
         let discovery_error = (!discovery.errors.is_empty()).then(|| discovery.errors.join("\n"));
         self.preset_error = None;
+        let mut load_errors = Vec::new();
         if let Some(index) = active_id
             .as_ref()
             .and_then(|id| self.presets.iter().position(|preset| &preset.id == id))
         {
             self.load_preset(index);
+            if let Some(error) = self.preset_error.take() {
+                load_errors.push(error);
+            }
+        } else if self.gpu_preset.is_none() && self.gpu_state.is_some() {
+            for index in 0..self.presets.len() {
+                self.load_preset(index);
+                if let Some(error) = self.preset_error.take() {
+                    load_errors.push(error);
+                }
+                if self.gpu_preset.is_some() {
+                    break;
+                }
+            }
         }
-        self.preset_error = match (discovery_error, self.preset_error.take()) {
+        let load_error = (!load_errors.is_empty()).then(|| load_errors.join("\n"));
+        self.preset_error = match (discovery_error, load_error) {
             (Some(discovery), Some(load)) => Some(format!("{discovery}\n{load}")),
             (Some(error), None) | (None, Some(error)) => Some(error),
             (None, None) => None,
@@ -567,6 +990,191 @@ impl VisualizerApp {
             (current + self.presets.len() - 1) % self.presets.len()
         };
         self.load_preset(next);
+    }
+
+    fn active_scene_identity(&self) -> Result<(String, String), String> {
+        match self.visual {
+            0 => Ok(("host.neon-scope".to_owned(), "Neon Scope".to_owned())),
+            1 => Ok((
+                "host.particle-forge".to_owned(),
+                "Particle Forge".to_owned(),
+            )),
+            _ => {
+                let id = self
+                    .gpu_preset
+                    .as_ref()
+                    .map(GpuPresetRenderer::active_id)
+                    .ok_or_else(|| "No GPU preset is active.".to_owned())?;
+                let preset = self
+                    .presets
+                    .iter()
+                    .find(|preset| preset.id == id)
+                    .ok_or_else(|| "The active preset is no longer available.".to_owned())?;
+                Ok((preset.id.clone(), preset.name.clone()))
+            }
+        }
+    }
+
+    fn capture_scene(&self, requested_name: &str) -> Result<SceneSnapshot, String> {
+        let (mode_id, mode_name) = self.active_scene_identity()?;
+        let name = if requested_name.trim().is_empty() {
+            format!("{mode_name} view")
+        } else {
+            requested_name.trim().to_owned()
+        };
+        Ok(SceneSnapshot {
+            saved_at_ms: 0,
+            name,
+            mode_id,
+            mode_name,
+            gain: self.gain.clamp(0.25, 6.0),
+            palette: self.colors.palette.code(),
+            finish: self.colors.finish.code(),
+            colors: [
+                self.colors.full.to_array(),
+                self.colors.bass.to_array(),
+                self.colors.mid.to_array(),
+                self.colors.treble.to_array(),
+                self.colors.background.to_array(),
+            ],
+            glow: self.colors.glow,
+            gloss: self.colors.gloss,
+            saturation: self.colors.saturation,
+            camera_yaw: self.interaction.camera_yaw,
+            camera_pitch: self.interaction.camera_pitch,
+            camera_zoom: self.interaction.camera_zoom,
+            show_handles: self.interaction.show_handles,
+            selected_zone: self.interaction.selected,
+            zones: self
+                .interaction
+                .zones
+                .iter()
+                .map(|zone| SceneZone {
+                    x: zone.position.x,
+                    y: zone.position.y,
+                    radius: zone.radius,
+                    strength: zone.strength,
+                    band: zone.band.code(),
+                    pinned: zone.pinned,
+                })
+                .collect(),
+            parameters: self.mode_parameters,
+        })
+    }
+
+    fn save_scene(&mut self) {
+        let result = self
+            .capture_scene(&self.scene_name)
+            .and_then(|snapshot| scene::save(&self.scene_directory, snapshot));
+        match result {
+            Ok(saved) => {
+                self.scene_notice = Some(format!("Saved scene · {}", saved.path.display()));
+                self.scenes.insert(0, saved);
+                self.selected_scene = 0;
+                self.scene_name.clear();
+            }
+            Err(error) => self.scene_notice = Some(error),
+        }
+    }
+
+    fn refresh_scenes(&mut self) {
+        let discovery = scene::discover(&self.scene_directory);
+        self.scenes = discovery.scenes;
+        self.selected_scene = self.selected_scene.min(self.scenes.len().saturating_sub(1));
+        self.scene_notice = if discovery.errors.is_empty() {
+            Some(format!("Refreshed scenes · {}", self.scenes.len()))
+        } else {
+            Some(discovery.errors.join("\n"))
+        };
+    }
+
+    fn restore_scene(&mut self, index: usize) {
+        let Some(saved) = self.scenes.get(index).cloned() else {
+            self.scene_notice = Some("The selected scene is no longer available.".to_owned());
+            return;
+        };
+        let snapshot = saved.snapshot;
+        match snapshot.mode_id.as_str() {
+            "host.neon-scope" => self.visual = 0,
+            "host.particle-forge" => self.visual = 1,
+            id => {
+                let Some(preset_index) = self.presets.iter().position(|preset| preset.id == id)
+                else {
+                    self.scene_notice = Some(format!(
+                        "Scene requires missing preset `{}`.",
+                        snapshot.mode_name
+                    ));
+                    return;
+                };
+                self.visual = 2;
+                self.load_preset(preset_index);
+                if self
+                    .gpu_preset
+                    .as_ref()
+                    .is_none_or(|renderer| renderer.active_id() != id)
+                {
+                    self.scene_notice =
+                        Some(self.preset_error.clone().unwrap_or_else(|| {
+                            format!("Could not load `{}`.", snapshot.mode_name)
+                        }));
+                    return;
+                }
+            }
+        }
+        self.gain = snapshot.gain;
+        self.colors.palette = PalettePreset::from_code(snapshot.palette);
+        self.colors.finish = SurfaceFinish::from_code(snapshot.finish);
+        [
+            self.colors.full,
+            self.colors.bass,
+            self.colors.mid,
+            self.colors.treble,
+            self.colors.background,
+        ] = snapshot
+            .colors
+            .map(|color| Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]));
+        self.colors.glow = snapshot.glow;
+        self.colors.gloss = snapshot.gloss;
+        self.colors.saturation = snapshot.saturation;
+        self.mode_parameters = snapshot.parameters;
+        if self.visual == 2
+            && let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
+                self.presets
+                    .iter()
+                    .find(|preset| preset.id == renderer.active_id())
+            })
+        {
+            for (value, parameter) in self.mode_parameters.iter_mut().zip(&preset.parameters) {
+                *value = value.clamp(parameter.minimum, parameter.maximum);
+                if parameter.id == "response" {
+                    self.gain = *value;
+                }
+            }
+        }
+        self.interaction = InteractionState {
+            zones: snapshot
+                .zones
+                .into_iter()
+                .map(|zone| SoundZone {
+                    position: Vec2::new(zone.x, zone.y),
+                    radius: zone.radius,
+                    strength: zone.strength,
+                    band: ZoneBand::from_code(zone.band),
+                    pinned: zone.pinned,
+                })
+                .collect(),
+            selected: snapshot.selected_zone,
+            drag_origin: None,
+            camera_drag_origin: None,
+            camera_yaw: snapshot.camera_yaw,
+            camera_pitch: snapshot.camera_pitch,
+            camera_zoom: snapshot.camera_zoom,
+            show_handles: snapshot.show_handles,
+        };
+        self.scene_notice = Some(format!(
+            "Restored scene · {} · {}",
+            snapshot.name, snapshot.mode_name
+        ));
     }
 
     fn refresh_plugins(&mut self) {
@@ -676,21 +1284,40 @@ impl VisualizerApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
-        let (tab, left, right, up, down, borderless, f11, escape, microphone, system) =
-            ctx.input(|input| {
-                (
-                    input.key_pressed(egui::Key::Tab),
-                    input.key_pressed(egui::Key::ArrowLeft),
-                    input.key_pressed(egui::Key::ArrowRight),
-                    input.key_pressed(egui::Key::ArrowUp),
-                    input.key_pressed(egui::Key::ArrowDown),
-                    input.key_pressed(egui::Key::B),
-                    input.key_pressed(egui::Key::F11),
-                    input.key_pressed(egui::Key::Escape),
-                    input.key_pressed(egui::Key::M),
-                    input.key_pressed(egui::Key::S),
-                )
-            });
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (
+            tab,
+            left,
+            right,
+            up,
+            down,
+            borderless,
+            f11,
+            escape,
+            microphone,
+            system,
+            delete,
+            reset,
+            instrument,
+        ) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::Tab),
+                input.key_pressed(egui::Key::ArrowLeft),
+                input.key_pressed(egui::Key::ArrowRight),
+                input.key_pressed(egui::Key::ArrowUp),
+                input.key_pressed(egui::Key::ArrowDown),
+                input.key_pressed(egui::Key::B),
+                input.key_pressed(egui::Key::F11),
+                input.key_pressed(egui::Key::Escape),
+                input.key_pressed(egui::Key::M),
+                input.key_pressed(egui::Key::S),
+                input.key_pressed(egui::Key::Delete),
+                input.key_pressed(egui::Key::R),
+                input.key_pressed(egui::Key::I),
+            )
+        });
         let direct_visual = ctx.input(|input| {
             [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3]
                 .into_iter()
@@ -721,6 +1348,15 @@ impl VisualizerApp {
         if system {
             self.switch_default_source(SourceKind::System);
         }
+        if delete {
+            self.interaction.remove_selected();
+        }
+        if reset {
+            self.reset_interaction();
+        }
+        if instrument {
+            self.instrument_panel = !self.instrument_panel;
+        }
         if borderless {
             self.set_presentation(ctx, self.presentation.toggle_borderless());
         }
@@ -728,7 +1364,9 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.presentation != PresentationMode::Windowed {
+            if self.instrument_panel {
+                self.instrument_panel = false;
+            } else if self.presentation != PresentationMode::Windowed {
                 self.set_presentation(ctx, PresentationMode::Windowed);
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -736,15 +1374,424 @@ impl VisualizerApp {
         }
     }
 
+    fn interact_visual(&mut self, response: &egui::Response, rect: Rect) {
+        let pointer = response.interact_pointer_pos();
+        if response.secondary_clicked()
+            && let Some(pointer) = pointer
+        {
+            self.interaction.selected = self.nearest_zone(rect, pointer);
+        }
+        if response.double_clicked()
+            && let Some(pointer) = pointer
+            && self.nearest_zone(rect, pointer).is_none()
+        {
+            self.interaction
+                .add_zone(normalize_visual_position(rect, pointer));
+        }
+        if response.drag_started()
+            && let Some(pointer) = pointer
+        {
+            self.interaction.selected = self.nearest_zone(rect, pointer);
+            self.interaction.drag_origin = self
+                .interaction
+                .selected
+                .and_then(|index| self.interaction.zones.get(index))
+                .map(|zone| zone.position);
+            self.interaction.camera_drag_origin = self
+                .interaction
+                .selected
+                .is_none()
+                .then(|| Vec2::new(self.interaction.camera_yaw, self.interaction.camera_pitch));
+        }
+        if (response.dragged() || response.drag_stopped())
+            && let Some(origin) = self.interaction.drag_origin
+            && let Some(zone) = self
+                .interaction
+                .selected
+                .and_then(|index| self.interaction.zones.get_mut(index))
+        {
+            let delta = response.drag_delta();
+            zone.position = Vec2::new(
+                (origin.x + delta.x / rect.width().max(1.0)).clamp(0.0, 1.0),
+                (origin.y + delta.y / rect.height().max(1.0)).clamp(0.0, 1.0),
+            );
+        } else if (response.dragged() || response.drag_stopped())
+            && let Some(origin) = self.interaction.camera_drag_origin
+        {
+            let delta = response.drag_delta();
+            self.interaction.camera_yaw = origin.x - delta.x * 0.008;
+            self.interaction.camera_pitch = (origin.y + delta.y * 0.004).clamp(-1.2, 1.2);
+        }
+        if response.drag_stopped() {
+            self.interaction.drag_origin = None;
+            self.interaction.camera_drag_origin = None;
+        }
+        if response.hovered() {
+            let scroll = response.ctx.input(|input| input.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                self.interaction.camera_zoom =
+                    (self.interaction.camera_zoom * (-scroll * 0.0015).exp()).clamp(0.35, 3.0);
+            }
+        }
+    }
+
+    fn reset_interaction(&mut self) {
+        let cityscape = self.visual == 2
+            && self
+                .gpu_preset
+                .as_ref()
+                .is_some_and(|renderer| renderer.active_id() == "thevisualizer.cityscape");
+        self.interaction = if cityscape {
+            InteractionState::cityscape()
+        } else {
+            InteractionState::default()
+        };
+    }
+
+    fn nearest_zone(&self, rect: Rect, pointer: Pos2) -> Option<usize> {
+        let scale = rect.size().min_elem();
+        self.interaction
+            .zones
+            .iter()
+            .enumerate()
+            .filter_map(|(index, zone)| {
+                let distance = visual_position(rect, zone.position).distance(pointer);
+                (distance <= (zone.radius * scale).max(18.0)).then_some((index, distance))
+            })
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+            .map(|(index, _)| index)
+    }
+
+    fn draw_zone_handles(&self, painter: &egui::Painter, rect: Rect) {
+        if !self.interaction.show_handles {
+            return;
+        }
+        let scale = rect.size().min_elem();
+        for (index, zone) in self.interaction.zones.iter().enumerate() {
+            let center = visual_position(rect, zone.position);
+            let energy = zone.band.energy(&self.features) * zone.strength;
+            let radius = (zone.radius * scale * (1.0 + energy * 0.16)).max(24.0);
+            let color = self.colors.band_color(zone.band);
+            let selected = self.interaction.selected == Some(index);
+            let finish_alpha = match self.colors.finish {
+                SurfaceFinish::Neon => 1.0,
+                SurfaceFinish::Glossy => 0.85,
+                SurfaceFinish::Matte => 0.55,
+                SurfaceFinish::Metallic => 0.72,
+                SurfaceFinish::Glass => 0.62,
+            };
+            let range_color = color.gamma_multiply(
+                (if selected { 0.52 } else { 0.16 } + energy * 0.32) * finish_alpha,
+            );
+            let tick_length = if selected { 12.0 } else { 7.0 } + energy * 5.0;
+            for direction in [
+                Vec2::new(1.0, 0.0),
+                Vec2::new(0.0, 1.0),
+                Vec2::new(-1.0, 0.0),
+                Vec2::new(0.0, -1.0),
+            ] {
+                let edge = center + direction * radius;
+                let tangent = Vec2::new(-direction.y, direction.x) * (tick_length * 0.5);
+                painter.line_segment(
+                    [edge - tangent, edge + tangent],
+                    Stroke::new(if selected { 1.8 } else { 1.0 }, range_color),
+                );
+            }
+
+            let marker_size = if selected { 7.0 } else { 5.0 } + energy * 3.0;
+            let diamond = [
+                center + Vec2::new(0.0, -marker_size),
+                center + Vec2::new(marker_size, 0.0),
+                center + Vec2::new(0.0, marker_size),
+                center + Vec2::new(-marker_size, 0.0),
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                diamond.to_vec(),
+                color.gamma_multiply(if zone.pinned { 0.7 } else { 0.18 }),
+                Stroke::new(
+                    if selected { 2.0 } else { 1.0 },
+                    color.gamma_multiply(0.72 + energy * 0.25),
+                ),
+            ));
+            if selected {
+                painter.text(
+                    center + Vec2::new(marker_size + 7.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{}  {}", index + 1, zone.band.label()),
+                    egui::FontId::monospace(10.0),
+                    color.gamma_multiply(0.78),
+                );
+            }
+        }
+    }
+
+    fn draw_visual_context_menu(&mut self, ui: &mut egui::Ui) {
+        let mut visual = None;
+        let mut preset = None;
+        ui.menu_button("Mode", |ui| {
+            if ui
+                .selectable_label(self.visual == 0, "Neon Scope")
+                .clicked()
+            {
+                visual = Some(0);
+            }
+            if ui
+                .selectable_label(self.visual == 1, "Particle Forge")
+                .clicked()
+            {
+                visual = Some(1);
+            }
+            ui.separator();
+            let active_id = self.gpu_preset.as_ref().map(GpuPresetRenderer::active_id);
+            for (index, candidate) in self.presets.iter().enumerate() {
+                if ui
+                    .selectable_label(active_id == Some(candidate.id.as_str()), &candidate.name)
+                    .clicked()
+                {
+                    visual = Some(2);
+                    preset = Some(index);
+                }
+            }
+        });
+        if let Some(visual) = visual {
+            self.visual = visual;
+        }
+        if let Some(index) = preset {
+            self.load_preset(index);
+        }
+
+        let mut remove = false;
+        ui.menu_button(
+            format!(
+                "Sound Zones ({}/{MAX_SOUND_ZONES})",
+                self.interaction.zones.len()
+            ),
+            |ui| {
+                if ui
+                    .add_enabled(
+                        self.interaction.zones.len() < MAX_SOUND_ZONES,
+                        egui::Button::new("Add at center"),
+                    )
+                    .clicked()
+                {
+                    self.interaction.add_zone(Vec2::new(0.5, 0.5));
+                }
+                if ui.button("Reset zones").clicked() {
+                    self.reset_interaction();
+                }
+                ui.separator();
+                if let Some(zone) = self
+                    .interaction
+                    .selected
+                    .and_then(|index| self.interaction.zones.get_mut(index))
+                {
+                    ui.label("Selected zone");
+                    ui.checkbox(&mut zone.pinned, "Pinned");
+                    ui.add(egui::Slider::new(&mut zone.radius, 0.04..=0.45).text("Radius"));
+                    ui.add(egui::Slider::new(&mut zone.strength, 0.0..=3.0).text("Strength"));
+                    ui.menu_button(format!("Band · {}", zone.band.label()), |ui| {
+                        for band in [ZoneBand::Full, ZoneBand::Low, ZoneBand::Mid, ZoneBand::High] {
+                            ui.radio_value(&mut zone.band, band, band.label());
+                        }
+                    });
+                    remove = ui
+                        .add_enabled(!zone.pinned, egui::Button::new("Remove selected"))
+                        .clicked();
+                } else {
+                    ui.label("Right-click or drag a zone to select it.");
+                }
+            },
+        );
+        if remove {
+            self.interaction.remove_selected();
+        }
+
+        let parameters = self
+            .gpu_preset
+            .as_ref()
+            .and_then(|renderer| {
+                self.presets
+                    .iter()
+                    .find(|preset| preset.id == renderer.active_id())
+            })
+            .map(|preset| preset.parameters.clone());
+        ui.menu_button("Mode Controls", |ui| {
+            if self.visual == 2
+                && let Some(parameters) = &parameters
+            {
+                let mut groups = Vec::new();
+                for parameter in parameters {
+                    if !groups.contains(&parameter.group) {
+                        groups.push(parameter.group.clone());
+                    }
+                }
+                for group in groups {
+                    ui.menu_button(&group, |ui| {
+                        for (index, parameter) in parameters
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, parameter)| parameter.group == group)
+                        {
+                            let changed = ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.mode_parameters[index],
+                                        parameter.minimum..=parameter.maximum,
+                                    )
+                                    .text(&parameter.label),
+                                )
+                                .changed();
+                            if changed && parameter.id == "response" {
+                                self.gain = self.mode_parameters[index];
+                            }
+                        }
+                    });
+                }
+            } else {
+                ui.add(egui::Slider::new(&mut self.gain, 0.25..=6.0).text("Response"));
+            }
+        });
+        ui.menu_button("Color & Material", |ui| {
+            let mut palette = None;
+            ui.menu_button(format!("Palette · {}", self.colors.palette.label()), |ui| {
+                for candidate in PalettePreset::ALL {
+                    if ui
+                        .selectable_label(self.colors.palette == candidate, candidate.label())
+                        .clicked()
+                    {
+                        palette = Some(candidate);
+                    }
+                }
+            });
+            if let Some(palette) = palette {
+                self.colors.apply_palette(palette);
+            }
+            ui.menu_button(format!("Finish · {}", self.colors.finish.label()), |ui| {
+                for finish in SurfaceFinish::ALL {
+                    ui.radio_value(&mut self.colors.finish, finish, finish.label());
+                }
+            });
+            ui.separator();
+            let mut customized = false;
+            for (label, color) in [
+                ("Full range", &mut self.colors.full),
+                ("Bass", &mut self.colors.bass),
+                ("Mid", &mut self.colors.mid),
+                ("Treble", &mut self.colors.treble),
+                ("Background", &mut self.colors.background),
+            ] {
+                ui.horizontal(|ui| {
+                    customized |= ui.color_edit_button_srgba(color).changed();
+                    ui.label(label);
+                });
+            }
+            if customized {
+                self.colors.palette = PalettePreset::Custom;
+            }
+            ui.add(egui::Slider::new(&mut self.colors.glow, 0.0..=2.0).text("Glow"));
+            ui.add(egui::Slider::new(&mut self.colors.gloss, 0.0..=1.0).text("Gloss"));
+            ui.add(egui::Slider::new(&mut self.colors.saturation, 0.0..=1.5).text("Saturation"));
+        });
+        ui.menu_button("Scene", |ui| {
+            ui.checkbox(&mut self.interaction.show_handles, "Show zone handles");
+            if ui.button("Reset interaction").clicked() {
+                self.reset_interaction();
+            }
+        });
+        let mut save_scene = false;
+        let mut restore_scene = None;
+        ui.menu_button("Saved Scenes", |ui| {
+            if ui.button("Save current view").clicked() {
+                save_scene = true;
+                ui.close();
+            }
+            if !self.scenes.is_empty() {
+                ui.separator();
+                for (index, saved) in self.scenes.iter().take(8).enumerate() {
+                    if ui
+                        .button(format!(
+                            "{} · {}",
+                            saved.snapshot.name, saved.snapshot.mode_name
+                        ))
+                        .clicked()
+                    {
+                        restore_scene = Some(index);
+                        ui.close();
+                    }
+                }
+            }
+        });
+        if save_scene {
+            self.save_scene();
+        }
+        if let Some(index) = restore_scene {
+            self.restore_scene(index);
+        }
+        ui.separator();
+        ui.label("Double-click to add · drag to move · R reset · Delete remove");
+    }
+
+    fn preset_scene_state(&self) -> [f32; PRESET_SCENE_FLOATS] {
+        let mut state = [0.0; PRESET_SCENE_FLOATS];
+        state[0] = self.interaction.zones.len() as f32;
+        state[1] = self.interaction.selected.map_or(-1.0, |index| index as f32);
+        state[2] = self.interaction.camera_yaw;
+        state[3] = self.interaction.camera_pitch;
+        state[4] = self.interaction.camera_zoom;
+        for (index, zone) in self.interaction.zones.iter().enumerate() {
+            let offset = 8 + index * 8;
+            state[offset] = zone.position.x;
+            state[offset + 1] = zone.position.y;
+            state[offset + 2] = zone.radius;
+            state[offset + 3] = zone.strength;
+            state[offset + 4] = match zone.band {
+                ZoneBand::Full => 0.0,
+                ZoneBand::Low => 1.0,
+                ZoneBand::Mid => 2.0,
+                ZoneBand::High => 3.0,
+            };
+            state[offset + 5] = if zone.pinned { 1.0 } else { 0.0 };
+            state[offset + 6] = zone.band.energy(&self.features);
+        }
+        for (index, color) in [
+            self.colors.full,
+            self.colors.bass,
+            self.colors.mid,
+            self.colors.treble,
+            self.colors.background,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = 72 + index * 4;
+            state[offset] = f32::from(color.r()) / 255.0;
+            state[offset + 1] = f32::from(color.g()) / 255.0;
+            state[offset + 2] = f32::from(color.b()) / 255.0;
+            state[offset + 3] = f32::from(color.a()) / 255.0;
+        }
+        state[92] = self.colors.glow;
+        state[93] = self.colors.gloss;
+        state[94] = self.colors.saturation;
+        state[95] = match self.colors.finish {
+            SurfaceFinish::Neon => 0.0,
+            SurfaceFinish::Glossy => 1.0,
+            SurfaceFinish::Matte => 2.0,
+            SurfaceFinish::Metallic => 3.0,
+            SurfaceFinish::Glass => 4.0,
+        };
+        state
+    }
+
     fn draw_visual(&self, painter: &egui::Painter, rect: Rect) {
         for strip in 0..24 {
             let t = strip as f32 / 23.0;
             let top = egui::lerp(rect.top()..=rect.bottom(), t);
             let bottom = egui::lerp(rect.top()..=rect.bottom(), (t + 1.0 / 23.0).min(1.0));
+            let background = self.colors.background;
             let color = Color32::from_rgb(
-                (3.0 + 7.0 * t) as u8,
-                (5.0 + 8.0 * t) as u8,
-                (14.0 + 18.0 * t) as u8,
+                (background.r() as f32 * (0.8 + t * 0.35) + t * 3.0).min(255.0) as u8,
+                (background.g() as f32 * (0.8 + t * 0.35) + t * 4.0).min(255.0) as u8,
+                (background.b() as f32 * (0.8 + t * 0.35) + t * 8.0).min(255.0) as u8,
             );
             painter.rect_filled(
                 Rect::from_min_max(Pos2::new(rect.left(), top), Pos2::new(rect.right(), bottom)),
@@ -758,6 +1805,20 @@ impl VisualizerApp {
             1 => self.draw_particles(painter, rect),
             _ => {
                 if let Some(renderer) = &self.gpu_preset {
+                    let scene = self.preset_scene_state();
+                    let mut parameters = self.mode_parameters;
+                    let response_index = self
+                        .presets
+                        .iter()
+                        .find(|preset| preset.id == renderer.active_id())
+                        .and_then(|preset| {
+                            preset
+                                .parameters
+                                .iter()
+                                .position(|parameter| parameter.id == "response")
+                        })
+                        .unwrap_or(0);
+                    parameters[response_index] = self.gain * self.plugin_multiplier;
                     renderer.paint(
                         painter,
                         rect,
@@ -772,6 +1833,8 @@ impl VisualizerApp {
                             high: self.features.high,
                             rms: self.features.rms,
                             peak: self.features.peak,
+                            scene: &scene,
+                            parameters: &parameters,
                         },
                     );
                 } else {
@@ -787,7 +1850,7 @@ impl VisualizerApp {
             let x = egui::lerp(rect.left()..=rect.right(), grid as f32 / 8.0);
             painter.line_segment(
                 [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(20, 120, 145, 25)),
+                Stroke::new(1.0, self.colors.mid.gamma_multiply(0.1)),
             );
         }
         painter.line_segment(
@@ -795,7 +1858,7 @@ impl VisualizerApp {
                 Pos2::new(rect.left(), center.y),
                 Pos2::new(rect.right(), center.y),
             ],
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(30, 230, 210, 65)),
+            Stroke::new(1.0, self.colors.full.gamma_multiply(0.25)),
         );
 
         let amplitude = rect.height() * 0.32 * self.gain;
@@ -811,12 +1874,10 @@ impl VisualizerApp {
         for (trail, waveform) in history.iter().enumerate() {
             let age = (trail + 1) as f32 / history.len() as f32;
             let points = waveform_points(waveform, rect, center.y, amplitude);
-            let color = Color32::from_rgba_unmultiplied(
-                (125.0 - age * 90.0) as u8,
-                (85.0 + age * 170.0) as u8,
-                245,
-                (12.0 + age * 105.0) as u8,
-            );
+            let color = self
+                .colors
+                .spectrum_color(age)
+                .gamma_multiply(0.12 + age * 0.5);
             painter.add(egui::Shape::line(
                 points,
                 Stroke::new(0.7 + age * 1.2, color),
@@ -833,11 +1894,16 @@ impl VisualizerApp {
         );
         painter.add(egui::Shape::line(
             points.clone(),
-            Stroke::new(13.0, Color32::from_rgba_unmultiplied(0, 255, 220, 18)),
+            Stroke::new(
+                13.0,
+                self.colors
+                    .full
+                    .gamma_multiply(0.05 + self.colors.glow * 0.04),
+            ),
         ));
         painter.add(egui::Shape::line(
             points,
-            Stroke::new(2.0, Color32::from_rgb(215, 255, 250)),
+            Stroke::new(2.0, self.colors.full),
         ));
     }
 
@@ -866,7 +1932,10 @@ impl VisualizerApp {
                     - time_offset;
                 let radius = scale * (0.15 + frequency.powf(0.72) * 0.27 + value * 0.31);
                 let point = center + Vec2::new(angle.cos() * radius, angle.sin() * radius * 0.78);
-                let color = spectrum_color(frequency).gamma_multiply(0.12 + age * 0.7);
+                let color = self
+                    .colors
+                    .spectrum_color(frequency)
+                    .gamma_multiply(0.12 + age * 0.7);
                 painter.circle_filled(point, 0.7 + age * (1.0 + value * 3.8), color);
                 if trail + 1 == spectra.len() {
                     current_points.push((point, color, value));
@@ -896,10 +1965,7 @@ impl VisualizerApp {
         painter.circle_stroke(
             center,
             core,
-            Stroke::new(
-                1.5 + self.features.peak * 3.0,
-                Color32::from_rgb(100, 255, 225),
-            ),
+            Stroke::new(1.5 + self.features.peak * 3.0, self.colors.bass),
         );
     }
 
@@ -1112,7 +2178,8 @@ impl VisualizerApp {
                                                     &preset.name,
                                                 )
                                                 .on_hover_text(format!(
-                                                    "{} · {} · {} · {}",
+                                                    "format {} · {} · {} · {} · {}",
+                                                    preset.format,
                                                     preset.version,
                                                     preset.author,
                                                     preset.license,
@@ -1175,6 +2242,17 @@ impl VisualizerApp {
                                 {
                                     self.set_presentation(ctx, mode);
                                 }
+                            }
+                            ui.separator();
+                            if ui
+                                .selectable_label(self.instrument_panel, "Instrument [I]")
+                                .on_hover_text(
+                                    "Open the live inspector for audio routing, sound zones, mode \
+                                     controls, colors, materials, and camera settings.",
+                                )
+                                .clicked()
+                            {
+                                self.instrument_panel = !self.instrument_panel;
                             }
                         });
                         let details_label = if self.visual == 2 && !self.plugins.is_empty() {
@@ -1303,18 +2381,774 @@ impl VisualizerApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "<-/-> visual · Up/Down preset · B borderless · F11 fullscreen · Tab · Esc",
+                                "<-/-> visual · Up/Down preset · I instrument · Right-click visual · Tab · Esc",
                             )
                             .small()
                             .color(Color32::from_rgb(110, 130, 150)),
                         )
                         .on_hover_text(
                             "Left/Right cycles visuals; 1/2/3 selects one directly; Up/Down changes \
-                             GPU presets; Tab hides the overlay; Escape returns to windowed mode \
-                             before exiting.",
+                             GPU presets; I opens the Instrument Panel; right-click opens the compact \
+                             menu; Tab hides the overlay; Escape closes the panel or returns to \
+                             windowed mode before exiting.",
                         );
                     });
             });
+    }
+
+    fn draw_instrument_panel(&mut self, ctx: &egui::Context) {
+        let mut open = self.instrument_panel;
+        egui::Window::new("INSTRUMENT")
+            .id(egui::Id::new("instrument-panel"))
+            .anchor(egui::Align2::RIGHT_TOP, [-20.0, 20.0])
+            .default_width(400.0)
+            .min_width(340.0)
+            .max_width(520.0)
+            .resizable(true)
+            .vscroll(true)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_max_width(480.0);
+                let active_id = self.gpu_preset.as_ref().map(GpuPresetRenderer::active_id);
+                let mode_name = match self.visual {
+                    0 => "Neon Scope".to_owned(),
+                    1 => "Particle Forge".to_owned(),
+                    _ => active_id
+                        .and_then(|id| self.presets.iter().find(|preset| preset.id == id))
+                        .map_or_else(
+                            || "No valid preset".to_owned(),
+                            |preset| preset.name.clone(),
+                        ),
+                };
+                let mut chosen_visual = None;
+                let mut chosen_preset = None;
+                ui.horizontal(|ui| {
+                    ui.label("Mode");
+                    egui::ComboBox::from_id_salt("instrument-mode")
+                        .width(245.0)
+                        .selected_text(&mode_name)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(self.visual == 0, "Neon Scope")
+                                .clicked()
+                            {
+                                chosen_visual = Some(0);
+                            }
+                            if ui
+                                .selectable_label(self.visual == 1, "Particle Forge")
+                                .clicked()
+                            {
+                                chosen_visual = Some(1);
+                            }
+                            ui.separator();
+                            for (index, preset) in self.presets.iter().enumerate() {
+                                if ui
+                                    .selectable_label(
+                                        self.visual == 2 && active_id == Some(preset.id.as_str()),
+                                        &preset.name,
+                                    )
+                                    .clicked()
+                                {
+                                    chosen_visual = Some(2);
+                                    chosen_preset = Some(index);
+                                }
+                            }
+                        });
+                });
+                if let Some(visual) = chosen_visual {
+                    self.visual = visual;
+                }
+                if let Some(index) = chosen_preset {
+                    self.load_preset(index);
+                }
+
+                let mut save_scene = false;
+                let mut refresh_scenes = false;
+                let mut restore_selected_scene = false;
+                egui::CollapsingHeader::new(format!("Saved Scenes · {}", self.scenes.len()))
+                    .id_salt("instrument-saved-scenes")
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "Capture this mode's sliders, colors, zones, materials, and camera.",
+                            )
+                            .small()
+                            .color(Color32::from_rgb(145, 170, 190)),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.scene_name)
+                                    .hint_text(format!("{mode_name} view"))
+                                    .desired_width(245.0),
+                            );
+                            if ui.button("Save").clicked() {
+                                save_scene = true;
+                            }
+                            if ui.small_button("Refresh").clicked() {
+                                refresh_scenes = true;
+                            }
+                        });
+                        if !self.scenes.is_empty() {
+                            let selected = self
+                                .scenes
+                                .get(self.selected_scene)
+                                .map_or("Select a saved scene", |saved| {
+                                    saved.snapshot.name.as_str()
+                                });
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_salt("instrument-saved-scene")
+                                    .selected_text(selected)
+                                    .width(285.0)
+                                    .show_ui(ui, |ui| {
+                                        for (index, saved) in self.scenes.iter().enumerate() {
+                                            ui.selectable_value(
+                                                &mut self.selected_scene,
+                                                index,
+                                                format!(
+                                                    "{} · {}",
+                                                    saved.snapshot.name, saved.snapshot.mode_name
+                                                ),
+                                            );
+                                        }
+                                    });
+                                if ui.button("Restore").clicked() {
+                                    restore_selected_scene = true;
+                                }
+                            });
+                        }
+                        if let Some(notice) = &self.scene_notice {
+                            ui.label(
+                                egui::RichText::new(notice)
+                                    .small()
+                                    .color(Color32::from_rgb(145, 190, 170)),
+                            );
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Folder · {}",
+                                self.scene_directory.display()
+                            ))
+                            .small()
+                            .color(Color32::from_rgb(100, 125, 145)),
+                        );
+                    });
+                if save_scene {
+                    self.save_scene();
+                }
+                if refresh_scenes {
+                    self.refresh_scenes();
+                }
+                if restore_selected_scene {
+                    self.restore_scene(self.selected_scene);
+                }
+
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("LIVE AUDIO ROUTING")
+                        .small()
+                        .strong()
+                        .color(Color32::from_rgb(90, 245, 220)),
+                );
+                for (label, value, color) in [
+                    (
+                        "Full",
+                        (self.features.rms * 3.0).clamp(0.0, 1.0),
+                        self.colors.full,
+                    ),
+                    ("Bass", self.features.low, self.colors.bass),
+                    ("Mid", self.features.mid, self.colors.mid),
+                    ("Treble", self.features.high, self.colors.treble),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.add_sized([52.0, 18.0], egui::Label::new(label));
+                        ui.add(
+                            egui::ProgressBar::new(value.clamp(0.0, 1.0))
+                                .desired_width(ui.available_width())
+                                .fill(color)
+                                .text(format!("{value:.2}")),
+                        );
+                    });
+                }
+
+                egui::CollapsingHeader::new("Visual Director · Image Brief")
+                    .id_salt("instrument-visual-director")
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "Turns the current mode, routed colors, and live audio into an \
+                                 inspectable scene specification. No API request is sent.",
+                            )
+                            .small()
+                            .color(Color32::from_rgb(145, 170, 190)),
+                        );
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("director-intent")
+                                .selected_text(self.visual_director.intent.label())
+                                .show_ui(ui, |ui| {
+                                    for intent in OutputIntent::ALL {
+                                        ui.selectable_value(
+                                            &mut self.visual_director.intent,
+                                            intent,
+                                            intent.label(),
+                                        );
+                                    }
+                                });
+                            egui::ComboBox::from_id_salt("director-aspect")
+                                .selected_text(self.visual_director.aspect.label())
+                                .show_ui(ui, |ui| {
+                                    for aspect in Aspect::ALL {
+                                        ui.selectable_value(
+                                            &mut self.visual_director.aspect,
+                                            aspect,
+                                            aspect.label(),
+                                        );
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Capture");
+                            egui::ComboBox::from_id_salt("director-capture")
+                                .selected_text(self.visual_director.capture_profile.label())
+                                .show_ui(ui, |ui| {
+                                    for profile in CaptureProfile::ALL {
+                                        ui.selectable_value(
+                                            &mut self.visual_director.capture_profile,
+                                            profile,
+                                            profile.label(),
+                                        );
+                                    }
+                                });
+                            ui.label(format!(
+                                "{} · {}",
+                                self.visual_director.intent.quality(),
+                                self.visual_director
+                                    .aspect
+                                    .size(self.visual_director.intent)
+                            ));
+                        });
+
+                        egui::Grid::new("director-controls")
+                            .num_columns(2)
+                            .spacing([8.0, 3.0])
+                            .show(ui, |ui| {
+                                for (label, value) in [
+                                    (
+                                        "Music influence",
+                                        &mut self.visual_director.controls.music_influence,
+                                    ),
+                                    (
+                                        "Photorealism",
+                                        &mut self.visual_director.controls.photorealism,
+                                    ),
+                                    (
+                                        "Abstraction",
+                                        &mut self.visual_director.controls.abstraction,
+                                    ),
+                                    ("Chaos", &mut self.visual_director.controls.chaos),
+                                    ("Weirdness", &mut self.visual_director.controls.weirdness),
+                                    (
+                                        "Human presence",
+                                        &mut self.visual_director.controls.human_presence,
+                                    ),
+                                    (
+                                        "Era freedom",
+                                        &mut self.visual_director.controls.era_freedom,
+                                    ),
+                                    (
+                                        "Color freedom",
+                                        &mut self.visual_director.controls.color_freedom,
+                                    ),
+                                    (
+                                        "Environment",
+                                        &mut self
+                                            .visual_director
+                                            .controls
+                                            .environmental_complexity,
+                                    ),
+                                    ("Novelty", &mut self.visual_director.controls.novelty),
+                                ] {
+                                    ui.label(label);
+                                    ui.add(
+                                        egui::Slider::new(value, 0.0..=1.0)
+                                            .show_value(true)
+                                            .fixed_decimals(2),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+
+                        if ui.button("Compose new brief from live audio").clicked() {
+                            let routed_colors = format!(
+                                "full {}, bass {}, mids {}, treble {}, background {}",
+                                color_hex(self.colors.full),
+                                color_hex(self.colors.bass),
+                                color_hex(self.colors.mid),
+                                color_hex(self.colors.treble),
+                                color_hex(self.colors.background),
+                            );
+                            self.visual_director.compose(
+                                &mode_name,
+                                &self.features,
+                                self.colors.palette.label(),
+                                self.colors.finish.label(),
+                                &routed_colors,
+                            );
+                        }
+
+                        let mut export_brief = false;
+                        if let Some(brief) = &self.visual_director.brief {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(&brief.concept)
+                                    .strong()
+                                    .color(Color32::from_rgb(235, 245, 255)),
+                            );
+                            ui.label(format!(
+                                "DNA · {} · {} dominant · energy {:.2} · dynamics {:.2}",
+                                brief.visual_dna.passage,
+                                brief.visual_dna.dominant_band,
+                                brief.visual_dna.energy,
+                                brief.visual_dna.dynamics,
+                            ));
+                            egui::Grid::new("director-dna")
+                                .num_columns(4)
+                                .spacing([8.0, 2.0])
+                                .show(ui, |ui| {
+                                    for (index, (label, value)) in [
+                                        ("Bass", brief.visual_dna.bass),
+                                        ("Mids", brief.visual_dna.mids),
+                                        ("Treble", brief.visual_dna.treble),
+                                        ("Centroid", brief.visual_dna.spectral_center),
+                                        ("Rolloff", brief.visual_dna.spectral_rolloff),
+                                        ("Harmonic", brief.visual_dna.harmonic_density),
+                                        ("Transient", brief.visual_dna.transient_intensity),
+                                        ("Onsets", brief.visual_dna.onset_density),
+                                        ("Movement", brief.visual_dna.movement),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    {
+                                        ui.label(label);
+                                        ui.label(format!("{value:.2}"));
+                                        if index % 2 == 1 {
+                                            ui.end_row();
+                                        }
+                                    }
+                                    ui.end_row();
+                                });
+                            egui::CollapsingHeader::new("Scene specification")
+                                .id_salt("director-scene-specification")
+                                .show(ui, |ui| {
+                                    ui.label(format!("Subject · {}", brief.subject));
+                                    ui.label(format!("Environment · {}", brief.environment));
+                                    ui.label(format!("Era · {}", brief.era));
+                                    ui.label(format!("Event · {}", brief.event));
+                                    ui.label(format!(
+                                        "Capture · {}",
+                                        brief.capture_profile.label()
+                                    ));
+                                    ui.label(format!("Scene · {}", brief.scene));
+                                    ui.label(format!("Camera · {}", brief.camera));
+                                    ui.label(format!("Lighting · {}", brief.lighting));
+                                    ui.label(format!("Materials · {}", brief.materials));
+                                    ui.label(format!("Motion · {}", brief.motion));
+                                    ui.label(format!(
+                                        "Imperfections · {}",
+                                        brief.imperfections.join("; ")
+                                    ));
+                                    ui.label(format!("Novelty ID · {:016X}", brief.novelty_id));
+                                });
+                            egui::CollapsingHeader::new("Preflight critique")
+                                .id_salt("director-preflight")
+                                .show(ui, |ui| {
+                                    for (label, value, color) in [
+                                        (
+                                            "Concept novelty",
+                                            brief.preflight.novelty,
+                                            Color32::from_rgb(20, 215, 180),
+                                        ),
+                                        (
+                                            "Physical plausibility",
+                                            brief.preflight.plausibility,
+                                            Color32::from_rgb(90, 165, 255),
+                                        ),
+                                        (
+                                            "AI cliché risk",
+                                            brief.preflight.cliche_risk,
+                                            Color32::from_rgb(255, 90, 125),
+                                        ),
+                                    ] {
+                                        ui.add(
+                                            egui::ProgressBar::new(value)
+                                                .text(format!("{label} · {value:.2}"))
+                                                .fill(color),
+                                        );
+                                    }
+                                    for note in &brief.preflight.notes {
+                                        ui.label(format!("· {note}"));
+                                    }
+                                });
+                            let mut prompt = brief.prompt.clone();
+                            let prompt_width = ui.available_width().min(480.0);
+                            ui.add(
+                                egui::TextEdit::multiline(&mut prompt)
+                                    .desired_rows(9)
+                                    .desired_width(prompt_width)
+                                    .interactive(false),
+                            );
+                            ui.horizontal(|ui| {
+                                if ui.button("Copy generation prompt").clicked() {
+                                    ui.ctx().copy_text(brief.prompt.clone());
+                                }
+                                if ui.button("Export brief .md").clicked() {
+                                    export_brief = true;
+                                }
+                            });
+                        }
+                        if export_brief {
+                            self.visual_director.export_current_brief();
+                        }
+                        if let Some(notice) = &self.visual_director.export_notice {
+                            ui.label(
+                                egui::RichText::new(notice)
+                                    .small()
+                                    .color(Color32::from_rgb(145, 190, 170)),
+                            );
+                        }
+
+                        if !self.visual_director.history().is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Brief history · {}",
+                                self.visual_director.history().len()
+                            ))
+                            .id_salt("director-history")
+                            .show(ui, |ui| {
+                                for entry in self.visual_director.history().iter().rev().take(8) {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(&entry.concept)
+                                                .strong()
+                                                .color(Color32::from_rgb(205, 225, 240)),
+                                        );
+                                        if ui.small_button("Copy prompt").clicked() {
+                                            ui.ctx().copy_text(entry.prompt.clone());
+                                        }
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} · {} · {} {} · {} · {:016X}",
+                                            entry.mode,
+                                            entry.capture,
+                                            entry.intent,
+                                            entry.size,
+                                            entry.aspect,
+                                            entry.novelty_id,
+                                        ))
+                                        .small()
+                                        .color(Color32::from_rgb(130, 155, 175)),
+                                    );
+                                    ui.separator();
+                                }
+                                if let Some(path) = self.visual_director.history_location() {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Stored locally · {}",
+                                            path.display()
+                                        ))
+                                        .small(),
+                                    );
+                                }
+                            });
+                        }
+                        if let Some(error) = &self.visual_director.history_error {
+                            ui.colored_label(Color32::from_rgb(255, 160, 90), error);
+                        }
+
+                        let key_present = std::env::var_os("OPENAI_API_KEY").is_some();
+                        ui.add_enabled(
+                            false,
+                            egui::Button::new(format!(
+                                "Generate {} · API not connected",
+                                self.visual_director.intent.label().to_ascii_lowercase()
+                            )),
+                        )
+                        .on_hover_text(if key_present {
+                            "A key is present, but this build intentionally has no unvalidated paid \
+                             request path."
+                        } else {
+                            "OPENAI_API_KEY is not set. Brief composition remains fully local and \
+                             cost-free."
+                        });
+                    });
+
+                egui::CollapsingHeader::new(format!(
+                    "Sound Zones · {}/{}",
+                    self.interaction.zones.len(),
+                    MAX_SOUND_ZONES
+                ))
+                .id_salt("instrument-zones")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let mut select = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for (index, zone) in self.interaction.zones.iter().enumerate() {
+                            if ui
+                                .selectable_label(
+                                    self.interaction.selected == Some(index),
+                                    format!("{} {}", index + 1, zone.band.label()),
+                                )
+                                .on_hover_text(format!(
+                                    "{} · radius {:.2} · strength {:.2}{}",
+                                    zone.band.label(),
+                                    zone.radius,
+                                    zone.strength,
+                                    if zone.pinned { " · pinned" } else { "" }
+                                ))
+                                .clicked()
+                            {
+                                select = Some(index);
+                            }
+                        }
+                    });
+                    if let Some(index) = select {
+                        self.interaction.selected = Some(index);
+                    }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                self.interaction.zones.len() < MAX_SOUND_ZONES,
+                                egui::Button::new("Add zone"),
+                            )
+                            .clicked()
+                        {
+                            self.interaction.add_zone(Vec2::new(0.5, 0.5));
+                        }
+                        if ui.button("Reset zones").clicked() {
+                            self.reset_interaction();
+                        }
+                    });
+
+                    let mut remove = false;
+                    if let Some(zone) = self
+                        .interaction
+                        .selected
+                        .and_then(|index| self.interaction.zones.get_mut(index))
+                    {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("instrument-zone-band")
+                                .selected_text(format!("Band · {}", zone.band.label()))
+                                .show_ui(ui, |ui| {
+                                    for band in [
+                                        ZoneBand::Full,
+                                        ZoneBand::Low,
+                                        ZoneBand::Mid,
+                                        ZoneBand::High,
+                                    ] {
+                                        ui.selectable_value(&mut zone.band, band, band.label());
+                                    }
+                                });
+                            ui.checkbox(&mut zone.pinned, "Pinned");
+                        });
+                        ui.add(
+                            egui::Slider::new(&mut zone.radius, 0.04..=0.45)
+                                .text("Radius")
+                                .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut zone.strength, 0.0..=3.0)
+                                .text("Strength")
+                                .fixed_decimals(2),
+                        );
+                        remove = ui
+                            .add_enabled(!zone.pinned, egui::Button::new("Remove selected"))
+                            .clicked();
+                    } else {
+                        ui.label("Select a zone here or directly in the visual.");
+                    }
+                    if remove {
+                        self.interaction.remove_selected();
+                    }
+                });
+
+                egui::CollapsingHeader::new("Mode Controls")
+                    .id_salt("instrument-mode-controls")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let preset = self.gpu_preset.as_ref().and_then(|renderer| {
+                            self.presets
+                                .iter()
+                                .find(|preset| preset.id == renderer.active_id())
+                                .cloned()
+                        });
+                        if self.visual == 2
+                            && let Some(preset) = preset
+                        {
+                            if ui.button("Reset all mode controls").clicked() {
+                                self.mode_parameters = preset_parameter_defaults(&preset);
+                                self.gain = preset.response.default;
+                            }
+                            let mut groups = Vec::new();
+                            for parameter in &preset.parameters {
+                                if !groups.contains(&parameter.group) {
+                                    groups.push(parameter.group.clone());
+                                }
+                            }
+                            for group in groups {
+                                egui::CollapsingHeader::new(&group)
+                                    .id_salt(("instrument-parameter-group", &group))
+                                    .default_open(group == "Audio")
+                                    .show(ui, |ui| {
+                                        if ui.small_button("Reset group").clicked() {
+                                            for (index, parameter) in
+                                                preset.parameters.iter().enumerate().filter(
+                                                    |(_, parameter)| parameter.group == group,
+                                                )
+                                            {
+                                                self.mode_parameters[index] = parameter.default;
+                                                if parameter.id == "response" {
+                                                    self.gain = parameter.default;
+                                                }
+                                            }
+                                        }
+                                        for (index, parameter) in preset
+                                            .parameters
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(_, parameter)| parameter.group == group)
+                                        {
+                                            let changed = ui
+                                                .add(
+                                                    egui::Slider::new(
+                                                        &mut self.mode_parameters[index],
+                                                        parameter.minimum..=parameter.maximum,
+                                                    )
+                                                    .text(&parameter.label)
+                                                    .fixed_decimals(2),
+                                                )
+                                                .changed();
+                                            if changed && parameter.id == "response" {
+                                                self.gain = self.mode_parameters[index];
+                                            }
+                                        }
+                                    });
+                            }
+                        } else {
+                            ui.add(
+                                egui::Slider::new(&mut self.gain, 0.25..=6.0)
+                                    .text("Response")
+                                    .fixed_decimals(2),
+                            );
+                        }
+                    });
+
+                egui::CollapsingHeader::new("Colors & Materials")
+                    .id_salt("instrument-colors")
+                    .show(ui, |ui| {
+                        let mut palette = self.colors.palette;
+                        egui::ComboBox::from_id_salt("instrument-palette")
+                            .selected_text(palette.label())
+                            .show_ui(ui, |ui| {
+                                for candidate in PalettePreset::ALL {
+                                    ui.selectable_value(&mut palette, candidate, candidate.label());
+                                }
+                            });
+                        if palette != self.colors.palette {
+                            self.colors.apply_palette(palette);
+                        }
+                        egui::ComboBox::from_id_salt("instrument-finish")
+                            .selected_text(self.colors.finish.label())
+                            .show_ui(ui, |ui| {
+                                for finish in SurfaceFinish::ALL {
+                                    ui.selectable_value(
+                                        &mut self.colors.finish,
+                                        finish,
+                                        finish.label(),
+                                    );
+                                }
+                            });
+                        let mut customized = false;
+                        for (label, color) in [
+                            ("Full range", &mut self.colors.full),
+                            ("Bass", &mut self.colors.bass),
+                            ("Mid", &mut self.colors.mid),
+                            ("Treble", &mut self.colors.treble),
+                            ("Background", &mut self.colors.background),
+                        ] {
+                            ui.horizontal(|ui| {
+                                customized |= ui.color_edit_button_srgba(color).changed();
+                                ui.label(label);
+                            });
+                        }
+                        if customized {
+                            self.colors.palette = PalettePreset::Custom;
+                        }
+                        gradient_value_control(
+                            ui,
+                            "Glow",
+                            &mut self.colors.glow,
+                            0.0,
+                            2.0,
+                            self.colors.background,
+                            self.colors.full,
+                        );
+                        gradient_value_control(
+                            ui,
+                            "Gloss",
+                            &mut self.colors.gloss,
+                            0.0,
+                            1.0,
+                            Color32::from_rgb(45, 50, 58),
+                            Color32::WHITE,
+                        );
+                        gradient_value_control(
+                            ui,
+                            "Saturation",
+                            &mut self.colors.saturation,
+                            0.0,
+                            1.5,
+                            Color32::from_gray(125),
+                            self.colors.treble,
+                        );
+                    });
+
+                egui::CollapsingHeader::new("Camera & Scene")
+                    .id_salt("instrument-camera")
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.interaction.camera_yaw,
+                                -std::f32::consts::TAU..=std::f32::consts::TAU,
+                            )
+                            .text("Yaw")
+                            .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.interaction.camera_pitch, -1.2..=1.2)
+                                .text("Pitch")
+                                .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.interaction.camera_zoom, 0.35..=3.0)
+                                .text("Zoom")
+                                .fixed_decimals(2),
+                        );
+                        ui.checkbox(&mut self.interaction.show_handles, "Show zone handles");
+                        if ui.button("Reset interaction").clicked() {
+                            self.reset_interaction();
+                        }
+                    });
+
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(
+                        "Drag zones · drag empty space to orbit · wheel to zoom · Esc closes panel",
+                    )
+                    .small()
+                    .color(Color32::from_rgb(110, 145, 165)),
+                );
+            });
+        self.instrument_panel = open;
     }
 
     fn draw_plugin_controls(&mut self, ui: &mut egui::Ui) {
@@ -1440,15 +3274,123 @@ impl eframe::App for VisualizerApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let rect = ui.max_rect();
+        let response = ui.interact(
+            rect,
+            ui.id().with("visual-interaction"),
+            egui::Sense::click_and_drag(),
+        );
+        self.interact_visual(&response, rect);
         self.draw_visual(&ui.painter_at(rect), rect);
+        self.draw_zone_handles(&ui.painter_at(rect), rect);
+        response.context_menu(|ui| self.draw_visual_context_menu(ui));
         if self.overlay {
             self.draw_overlay(ui.ctx());
+        }
+        if self.instrument_panel {
+            self.draw_instrument_panel(ui.ctx());
         }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.01, 0.015, 0.035, 1.0]
     }
+}
+
+fn normalize_visual_position(rect: Rect, position: Pos2) -> Vec2 {
+    Vec2::new(
+        ((position.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0),
+        ((position.y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0),
+    )
+}
+
+fn visual_position(rect: Rect, position: Vec2) -> Pos2 {
+    Pos2::new(
+        egui::lerp(rect.left()..=rect.right(), position.x),
+        egui::lerp(rect.top()..=rect.bottom(), position.y),
+    )
+}
+
+fn gradient_value_control(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    minimum: f32,
+    maximum: f32,
+    from: Color32,
+    to: Color32,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        changed |= ui
+            .add(
+                egui::DragValue::new(value)
+                    .range(minimum..=maximum)
+                    .speed((maximum - minimum) / 100.0)
+                    .fixed_decimals(2),
+            )
+            .changed();
+    });
+    let desired_size = Vec2::new(ui.available_width().max(120.0), 16.0);
+    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+    let segments = 48;
+    for segment in 0..segments {
+        let start = segment as f32 / segments as f32;
+        let end = (segment + 1) as f32 / segments as f32;
+        ui.painter().rect_filled(
+            Rect::from_min_max(
+                Pos2::new(egui::lerp(rect.left()..=rect.right(), start), rect.top()),
+                Pos2::new(egui::lerp(rect.left()..=rect.right(), end), rect.bottom()),
+            ),
+            0.0,
+            lerp_color(from, to, (start + end) * 0.5),
+        );
+    }
+    if (response.dragged() || response.clicked())
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let amount = ((pointer.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+        let next = egui::lerp(minimum..=maximum, amount);
+        changed |= (*value - next).abs() > f32::EPSILON;
+        *value = next;
+    }
+    let amount = ((*value - minimum) / (maximum - minimum).max(f32::EPSILON)).clamp(0.0, 1.0);
+    let x = egui::lerp(rect.left()..=rect.right(), amount);
+    ui.painter().line_segment(
+        [
+            Pos2::new(x, rect.top() - 2.0),
+            Pos2::new(x, rect.bottom() + 2.0),
+        ],
+        Stroke::new(2.0, Color32::WHITE),
+    );
+    ui.painter().rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, Color32::from_white_alpha(90)),
+        egui::StrokeKind::Inside,
+    );
+    changed
+}
+
+fn lerp_color(from: Color32, to: Color32, amount: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        egui::lerp(from.r() as f32..=to.r() as f32, amount) as u8,
+        egui::lerp(from.g() as f32..=to.g() as f32, amount) as u8,
+        egui::lerp(from.b() as f32..=to.b() as f32, amount) as u8,
+        egui::lerp(from.a() as f32..=to.a() as f32, amount) as u8,
+    )
+}
+
+fn color_hex(color: Color32) -> String {
+    format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b())
+}
+
+fn preset_parameter_defaults(preset: &Preset) -> [f32; PRESET_PARAMETER_FLOATS] {
+    let mut values = [0.0; PRESET_PARAMETER_FLOATS];
+    for (value, parameter) in values.iter_mut().zip(&preset.parameters) {
+        *value = parameter.default;
+    }
+    values
 }
 
 fn waveform_points(waveform: &[f32], rect: Rect, center_y: f32, amplitude: f32) -> Vec<Pos2> {
@@ -1464,23 +3406,6 @@ fn waveform_points(waveform: &[f32], rect: Rect, center_y: f32, amplitude: f32) 
             Pos2::new(x, center_y - sample * amplitude)
         })
         .collect()
-}
-
-fn spectrum_color(frequency: f32) -> Color32 {
-    let (from, to, amount) = if frequency < 0.55 {
-        ([25.0, 245.0, 210.0], [135.0, 85.0, 255.0], frequency / 0.55)
-    } else {
-        (
-            [135.0, 85.0, 255.0],
-            [255.0, 105.0, 115.0],
-            (frequency - 0.55) / 0.45,
-        )
-    };
-    Color32::from_rgb(
-        egui::lerp(from[0]..=to[0], amount) as u8,
-        egui::lerp(from[1]..=to[1], amount) as u8,
-        egui::lerp(from[2]..=to[2], amount) as u8,
-    )
 }
 
 fn default_needs_recovery<T: Eq>(
@@ -1539,9 +3464,10 @@ fn resource_directory(environment: &str, folder: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultSwitchTiming, Features, FrameLimit, FrameStats, LatencyStats, PresentationMode,
-        SourceKind, VisualHistory, callback_is_new, default_needs_recovery, pacing_delay,
-        status_hint, visual_index_for_key,
+        ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
+        LatencyStats, MAX_SOUND_ZONES, PalettePreset, PresentationMode, SourceKind, VisualHistory,
+        callback_is_new, default_needs_recovery, lerp_color, pacing_delay, status_hint,
+        visual_index_for_key,
     };
     use std::time::{Duration, Instant};
 
@@ -1561,6 +3487,40 @@ mod tests {
         assert!(callback_is_new(&mut last, 1));
         assert!(!callback_is_new(&mut last, 1));
         assert!(callback_is_new(&mut last, 2));
+    }
+
+    #[test]
+    fn interaction_zones_are_bounded_and_palettes_route_band_colors() {
+        let mut interaction = InteractionState::default();
+        for _ in 0..MAX_SOUND_ZONES + 3 {
+            interaction.add_zone(eframe::egui::Vec2::new(0.25, 0.75));
+        }
+        assert_eq!(interaction.zones.len(), MAX_SOUND_ZONES);
+
+        interaction.selected = Some(0);
+        interaction.zones[0].pinned = true;
+        interaction.remove_selected();
+        assert_eq!(interaction.zones.len(), MAX_SOUND_ZONES);
+        interaction.zones[0].pinned = false;
+        interaction.remove_selected();
+        assert_eq!(interaction.zones.len(), MAX_SOUND_ZONES - 1);
+
+        let mut colors = ColorSystem::default();
+        colors.apply_palette(PalettePreset::Inferno);
+        assert_eq!(colors.bass, eframe::egui::Color32::from_rgb(255, 35, 15));
+        assert_eq!(colors.treble, eframe::egui::Color32::from_rgb(255, 220, 75));
+    }
+
+    #[test]
+    fn gradient_colors_keep_their_endpoints() {
+        let dark = eframe::egui::Color32::from_rgb(10, 20, 30);
+        let bright = eframe::egui::Color32::from_rgb(110, 120, 130);
+        assert_eq!(lerp_color(dark, bright, 0.0), dark);
+        assert_eq!(lerp_color(dark, bright, 1.0), bright);
+        assert_eq!(
+            lerp_color(dark, bright, 0.5),
+            eframe::egui::Color32::from_rgb(60, 70, 80)
+        );
     }
 
     #[test]

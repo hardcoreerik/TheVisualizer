@@ -14,6 +14,11 @@ pub struct Features {
     pub low: f32,
     pub mid: f32,
     pub high: f32,
+    pub centroid_hz: f32,
+    pub rolloff_hz: f32,
+    pub spectral_flatness: f32,
+    pub crest_factor: f32,
+    pub transient: f32,
 }
 
 impl Default for Features {
@@ -26,6 +31,11 @@ impl Default for Features {
             low: 0.0,
             mid: 0.0,
             high: 0.0,
+            centroid_hz: 0.0,
+            rolloff_hz: 0.0,
+            spectral_flatness: 0.0,
+            crest_factor: 0.0,
+            transient: 0.0,
         }
     }
 }
@@ -33,6 +43,7 @@ impl Default for Features {
 pub struct Analyzer {
     fft: Arc<dyn Fft<f32>>,
     input: Vec<Complex32>,
+    previous_magnitudes: Vec<f32>,
 }
 
 impl Analyzer {
@@ -41,6 +52,7 @@ impl Analyzer {
         Self {
             fft: planner.plan_fft_forward(FFT_SIZE),
             input: vec![Complex32::ZERO; FFT_SIZE],
+            previous_magnitudes: vec![0.0; FFT_SIZE / 2 - 1],
         }
     }
 
@@ -70,6 +82,50 @@ impl Analyzer {
 
         let nyquist_bins = FFT_SIZE / 2;
         let hz_per_bin = sample_rate as f32 / FFT_SIZE as f32;
+        let magnitudes = self.input[1..nyquist_bins]
+            .iter()
+            .map(|bin| bin.norm())
+            .collect::<Vec<_>>();
+        let magnitude_sum = magnitudes.iter().sum::<f32>();
+        let centroid_hz = if magnitude_sum > f32::EPSILON {
+            magnitudes
+                .iter()
+                .enumerate()
+                .map(|(index, magnitude)| (index + 1) as f32 * hz_per_bin * magnitude)
+                .sum::<f32>()
+                / magnitude_sum
+        } else {
+            0.0
+        };
+        let rolloff_target = magnitude_sum * 0.85;
+        let mut cumulative = 0.0;
+        let mut rolloff_hz = 0.0;
+        for (index, magnitude) in magnitudes.iter().enumerate() {
+            cumulative += magnitude;
+            if cumulative >= rolloff_target {
+                rolloff_hz = (index + 1) as f32 * hz_per_bin;
+                break;
+            }
+        }
+        let arithmetic_mean = magnitude_sum / magnitudes.len().max(1) as f32;
+        let geometric_mean = (magnitudes
+            .iter()
+            .map(|magnitude| magnitude.max(1.0e-12).ln())
+            .sum::<f32>()
+            / magnitudes.len().max(1) as f32)
+            .exp();
+        let spectral_flatness = if arithmetic_mean > f32::EPSILON {
+            (geometric_mean / arithmetic_mean).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let positive_flux = magnitudes
+            .iter()
+            .zip(&self.previous_magnitudes)
+            .map(|(current, previous)| (current - previous).max(0.0))
+            .sum::<f32>();
+        let transient = (positive_flux / magnitude_sum.max(1.0e-12)).clamp(0.0, 1.0);
+        self.previous_magnitudes.clone_from_slice(&magnitudes);
         let mut spectrum = vec![0.0; SPECTRUM_BANDS];
         for (band, value) in spectrum.iter_mut().enumerate() {
             let start_ratio = band as f32 / SPECTRUM_BANDS as f32;
@@ -119,6 +175,11 @@ impl Analyzer {
             low: band_energy(20.0, 250.0),
             mid: band_energy(250.0, 2_000.0),
             high: band_energy(2_000.0, 12_000.0),
+            centroid_hz,
+            rolloff_hz,
+            spectral_flatness,
+            crest_factor: if rms > f32::EPSILON { peak / rms } else { 0.0 },
+            transient,
         }
     }
 }
@@ -141,5 +202,13 @@ mod tests {
         assert!(tone.rms > 0.3);
         assert!(tone.mid > tone.low);
         assert!(tone.mid > tone.high);
+        assert!((300.0..600.0).contains(&tone.centroid_hz));
+        assert!((300.0..700.0).contains(&tone.rolloff_hz));
+        assert!(tone.spectral_flatness < 0.1);
+        assert!(tone.crest_factor > 1.3);
+        assert!(tone.transient > 0.5);
+
+        let repeated = analyzer.analyze(&sine, 48_000);
+        assert!(repeated.transient < tone.transient);
     }
 }

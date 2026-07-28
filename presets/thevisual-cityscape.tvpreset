@@ -1,0 +1,373 @@
+//! format: 2
+//! id: thevisualizer.cityscape
+//! name: TheVisualCityScape
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-architecture|Bass Architecture|0.0|3.0|1.35
+//! parameter: Audio|mid-party|Mid Party Energy|0.0|3.0|1.2
+//! parameter: Audio|treble-sky|Treble Sky Energy|0.0|3.0|1.25
+//! parameter: Audio|beat-warp|Beat World Warp|0.0|2.0|0.65
+//! parameter: Camera and navigation|field-of-view|Field of View|35.0|110.0|72.0
+//! parameter: Camera and navigation|auto-orbit|Auto Orbit|0.0|1.0|0.04
+//! parameter: Camera and navigation|camera-height|Camera Height|0.4|2.5|1.15
+//! parameter: Camera and navigation|look-depth|Look Depth|0.3|2.5|1.0
+//! parameter: Buildings and streets|building-height|Building Height|0.4|2.2|1.0
+//! parameter: Buildings and streets|street-width|Street Width|0.25|1.6|0.75
+//! parameter: Buildings and streets|block-density|Block Density|8.0|36.0|20.0
+//! parameter: Buildings and streets|impossible-lean|Impossible Lean|0.0|1.5|0.35
+//! parameter: Buildings and streets|window-density|Window Density|3.0|18.0|9.0
+//! parameter: Buildings and streets|architecture-pulse|Architecture Pulse|0.0|2.0|0.6
+//! parameter: Hotel and apartments|room-activity|Room Activity|0.0|1.0|0.72
+//! parameter: Hotel and apartments|hotel-pulse|Hotel Bass Pulse|0.0|2.5|1.0
+//! parameter: Hotel and apartments|balcony-motion|Balcony Motion|0.0|2.0|0.55
+//! parameter: Party and crowd|crowd-density|Crowd Density|0.0|1.0|0.65
+//! parameter: Party and crowd|dance-energy|Dance Energy|0.0|2.5|1.2
+//! parameter: Party and crowd|rooftop-lights|Rooftop Lights|0.0|2.5|1.4
+//! parameter: Party and crowd|speaker-pulse|Speaker Pulse|0.0|2.5|1.1
+//! parameter: Traffic and particles|traffic-density|Traffic Density|0.0|1.0|0.68
+//! parameter: Traffic and particles|traffic-speed|Traffic Speed|0.0|3.0|1.0
+//! parameter: Traffic and particles|headlight-trails|Headlight Trails|0.0|2.0|0.85
+//! parameter: Traffic and particles|air-particles|Air Particles|0.0|1.0|0.55
+//! parameter: Sky worlds|sky-world|Sky World|0.0|4.0|2.0
+//! parameter: Sky worlds|portal-size|Portal Size|0.05|0.8|0.3
+//! parameter: Sky worlds|hyperspace-speed|Hyperspace Speed|0.0|4.0|1.25
+//! parameter: Sky worlds|aurora-strength|Aurora Strength|0.0|2.0|0.65
+//! parameter: Sky worlds|moon-size|Moon Size|0.0|0.6|0.18
+//! parameter: Physics|gravity-bend|Gravity Bend|0.0|2.0|0.45
+//! parameter: Physics|city-breath|City Breathing|0.0|2.0|0.5
+//! parameter: Physics|zone-falloff|Zone Falloff|0.05|1.0|0.28
+//! parameter: Generated scene content|scene-seed|Scene Seed|0.0|999.0|137.0
+//! ---
+struct PresetUniforms {
+    resolution: vec2f,
+    time: f32,
+    gain: f32,
+    audio: vec4f,
+}
+
+@group(0) @binding(0)
+var<uniform> uniforms: PresetUniforms;
+
+struct AudioFeatures {
+    waveform: array<f32, 256>,
+    spectrum: array<f32, 64>,
+}
+
+@group(0) @binding(1)
+var<storage, read> features: AudioFeatures;
+
+struct FrameExtras {
+    delta: f32,
+    peak: f32,
+    waveform_len: f32,
+    spectrum_len: f32,
+}
+
+@group(0) @binding(2)
+var<uniform> extras: FrameExtras;
+
+struct SceneState {
+    values: array<f32, 96>,
+}
+
+@group(0) @binding(3)
+var<storage, read> scene: SceneState;
+
+struct ModeParameters {
+    values: array<f32, 40>,
+}
+
+@group(0) @binding(4)
+var<storage, read> controls: ModeParameters;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {
+    let positions = array(
+        vec2f(-1.0, -3.0),
+        vec2f(3.0, 1.0),
+        vec2f(-1.0, 1.0),
+    );
+    return vec4f(positions[vertex_index], 0.0, 1.0);
+}
+
+fn hash11(value: f32) -> f32 {
+    return fract(sin(value * 127.1) * 43758.5453);
+}
+
+fn hash21(value: vec2f) -> f32 {
+    return fract(sin(dot(value, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+fn routed_color(offset: u32) -> vec3f {
+    return vec3f(
+        scene.values[offset],
+        scene.values[offset + 1u],
+        scene.values[offset + 2u],
+    );
+}
+
+fn zone_position(index: u32, aspect: f32) -> vec2f {
+    let offset = 8u + index * 8u;
+    return vec2f(
+        (scene.values[offset] * 2.0 - 1.0) * aspect,
+        scene.values[offset + 1u] * 2.0 - 1.0,
+    );
+}
+
+fn zone_energy(index: u32) -> f32 {
+    let offset = 8u + index * 8u;
+    return scene.values[offset + 3u] * scene.values[offset + 6u];
+}
+
+fn zone_field(uv: vec2f, index: u32, aspect: f32, falloff: f32) -> f32 {
+    let distance = length(uv - zone_position(index, aspect));
+    return exp(-distance * distance / max(falloff * falloff, 0.0025));
+}
+
+fn angle_distance(angle: f32) -> f32 {
+    return abs(atan2(sin(angle), cos(angle)));
+}
+
+fn saturate_color(color: vec3f, amount: f32) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    return mix(vec3f(luminance), color, amount);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    let aspect = resolution.x / resolution.y;
+    var uv = (position.xy * 2.0 - resolution) / resolution.y;
+
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mids = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let treble = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let rms = clamp(uniforms.audio.w * response * 3.0, 0.0, 1.5);
+    let bass_drive = bass * controls.values[1];
+    let party_drive = mids * controls.values[2];
+    let sky_drive = treble * controls.values[3];
+    let beat_warp = extras.peak * controls.values[4];
+
+    let field_of_view = controls.values[5] * 0.0174533;
+    let yaw = scene.values[2] + uniforms.time * controls.values[6];
+    let pitch = scene.values[3];
+    let zoom = max(scene.values[4], 0.35);
+    let horizon = 0.08 + pitch * 0.22 + (controls.values[7] - 1.15) * 0.08;
+    let world_angle = yaw + uv.x / zoom * field_of_view * 0.52;
+    let look_depth = controls.values[8];
+    let falloff = controls.values[33];
+    let scene_seed = controls.values[34];
+
+    let full_color = routed_color(72u);
+    let bass_color = routed_color(76u);
+    let mid_color = routed_color(80u);
+    let treble_color = routed_color(84u);
+    let background_color = routed_color(88u);
+    let glow = scene.values[92];
+    let gloss = scene.values[93];
+    let saturation = scene.values[94];
+    let finish = scene.values[95];
+
+    let sky_depth = clamp((horizon - uv.y) * 0.6, 0.0, 1.0);
+    var color = mix(background_color * 1.5, background_color * 0.22, sky_depth);
+
+    let sky_world = floor(controls.values[26] + 0.5);
+    let sky_cell = floor(vec2f(world_angle * 55.0, uv.y * 58.0));
+    let star_threshold = 0.988 - controls.values[25] * 0.01 - sky_drive * 0.003;
+    let stars = step(star_threshold, hash21(sky_cell + scene_seed));
+    color += treble_color * stars * step(uv.y, horizon - 0.02)
+        * (0.12 + sky_drive * 0.8);
+
+    let aurora = sin(
+        world_angle * (3.0 + sky_world)
+        + uv.y * 8.0
+        + uniforms.time * (0.18 + sky_world * 0.07)
+    );
+    let aurora_band = exp(-abs(uv.y + 0.48 + aurora * 0.12) * 7.0);
+    color += mix(mid_color, treble_color, 0.55 + aurora * 0.35)
+        * aurora_band * controls.values[29] * (0.08 + sky_drive * 0.22);
+
+    let moon_center = vec2f(
+        sin(yaw * 0.27 + scene_seed) * aspect * 0.42,
+        -0.48 + cos(yaw * 0.19) * 0.08,
+    );
+    let moon_distance = length(uv - moon_center);
+    let moon = 1.0 - smoothstep(
+        controls.values[30] * (0.8 + bass * 0.08),
+        controls.values[30] * (0.8 + bass * 0.08) + 0.015,
+        moon_distance
+    );
+    color += mix(full_color, treble_color, 0.35) * moon * (0.2 + gloss * 0.45);
+
+    let block_density = controls.values[11];
+    let cylinder_phase = fract(world_angle / 6.28318 + 0.5);
+    let block_coordinate = cylinder_phase * block_density + scene_seed;
+    let block_id = floor(block_coordinate);
+    let block_local = fract(block_coordinate) - 0.5;
+    let block_random = hash11(block_id + scene_seed * 3.17);
+    let building_height = (0.22 + block_random * 0.48)
+        * controls.values[9]
+        * (1.0 + bass_drive * controls.values[14] * 0.08);
+    let building_width = 0.31 + hash11(block_id + 9.7) * 0.13;
+    let lean = sin(block_id * 1.71 + uniforms.time * 0.08)
+        * controls.values[12]
+        * (horizon - uv.y)
+        * 0.22;
+    let breathing = sin(uniforms.time * 1.2 + block_id) * controls.values[32]
+        * bass * 0.012;
+    let building_x = block_local + lean + breathing;
+    let building = (1.0 - step(building_width, abs(building_x)))
+        * step(horizon - building_height, uv.y)
+        * (1.0 - step(horizon, uv.y));
+
+    let building_tint = mix(bass_color * 0.22, mid_color * 0.18, block_random);
+    color += building_tint * building;
+
+    let window_columns = max(controls.values[13], 3.0);
+    let window_cell = vec2f(
+        fract((building_x / max(building_width, 0.01) + 1.0) * window_columns),
+        fract((horizon - uv.y) * window_columns * 1.35)
+    );
+    let room_id = floor((horizon - uv.y) * window_columns * 1.35)
+        + block_id * 31.0
+        + floor(window_cell.x * window_columns);
+    let room_activity = step(
+        1.0 - controls.values[15] * (0.48 + party_drive * 0.18),
+        hash11(room_id + scene_seed)
+    );
+    let window = building
+        * step(0.17, window_cell.x)
+        * step(window_cell.x, 0.78)
+        * step(0.22, window_cell.y)
+        * step(window_cell.y, 0.72);
+    let room_flicker = 0.65 + 0.35 * sin(
+        uniforms.time * (1.0 + controls.values[17]) + room_id
+    );
+    color += mix(mid_color, treble_color, hash11(room_id + 4.0))
+        * window * room_activity * room_flicker * (0.18 + party_drive * 0.45);
+
+    let hotel_angle = angle_distance(world_angle);
+    let hotel_width = 0.34 + bass_drive * controls.values[16] * 0.018;
+    let hotel_local = hotel_angle / max(field_of_view, 0.01);
+    let hotel_height = 0.72 + bass_drive * controls.values[16] * 0.08;
+    let hotel = (1.0 - step(hotel_width, hotel_local))
+        * step(horizon - hotel_height, uv.y)
+        * (1.0 - step(horizon, uv.y));
+    color = mix(color, bass_color * (0.14 + bass_drive * 0.08), hotel);
+    let hotel_windows = hotel
+        * step(0.16, fract(hotel_local * 18.0))
+        * step(fract(hotel_local * 18.0), 0.76)
+        * step(0.18, fract((horizon - uv.y) * 19.0))
+        * step(fract((horizon - uv.y) * 19.0), 0.72);
+    color += mix(bass_color, mid_color, 0.55) * hotel_windows
+        * (0.12 + controls.values[15] * party_drive * 0.42);
+
+    let hotel_sign_y = abs(uv.y - (horizon - hotel_height * 0.72));
+    let hotel_sign = hotel
+        * (1.0 - step(hotel_width * 0.72, hotel_local))
+        * (1.0 - step(0.018, hotel_sign_y));
+    color += full_color * hotel_sign * (0.45 + bass_drive * 0.55) * (0.6 + glow);
+
+    let ground = uv.y - horizon;
+    if ground > 0.0 {
+        let depth = look_depth * 0.2 / max(ground, 0.012);
+        let bent_x = uv.x + sin(depth * 0.2 + yaw) * controls.values[31] * 0.08;
+        let lanes = abs(fract(bent_x * depth * controls.values[10] + 0.5) - 0.5);
+        let rows = abs(fract(depth - uniforms.time * controls.values[23]) - 0.5);
+        let lane_glow = 0.012 / max(lanes, 0.012);
+        let row_glow = 0.010 / max(rows, 0.012);
+        let ground_fade = smoothstep(1.25, 0.02, ground);
+        color += treble_color * lane_glow * ground_fade * 0.038;
+        color += mid_color * row_glow * ground_fade * 0.03;
+
+        let traffic_phase = fract(
+            depth * 0.75
+            + floor((bent_x + aspect) * 8.0) * 0.17
+            - uniforms.time * controls.values[23]
+        );
+        let traffic = (1.0 - step(0.035 + controls.values[22] * 0.035, abs(traffic_phase - 0.5)))
+            * step(hash11(floor(bent_x * 19.0) + scene_seed), controls.values[22])
+            * ground_fade;
+        color += mix(bass_color, treble_color, fract(bent_x * 2.0))
+            * traffic * (0.3 + controls.values[24] * 0.45);
+    }
+
+    let crowd_cell = floor(uv * vec2f(90.0, 52.0) + scene_seed);
+    let crowd_random = hash21(crowd_cell);
+    let crowd_zone = zone_field(uv, 1u, aspect, falloff);
+    let crowd = step(1.0 - controls.values[18] * 0.24, crowd_random)
+        * step(horizon - 0.02, uv.y)
+        * step(uv.y, horizon + 0.22)
+        * crowd_zone;
+    color += mid_color * crowd
+        * (0.2 + party_drive * controls.values[19] * 0.55)
+        * (0.65 + 0.35 * sin(uniforms.time * 7.0 + crowd_random * 20.0));
+
+    let roof_zone = zone_position(2u, aspect);
+    let roof_vector = uv - roof_zone;
+    let roof_angle = atan2(roof_vector.y, roof_vector.x);
+    let laser = pow(abs(cos(roof_angle * 7.0 + uniforms.time)), 80.0)
+        * smoothstep(1.2, 0.03, length(roof_vector));
+    color += treble_color * laser * controls.values[20]
+        * (0.04 + sky_drive * 0.22 + zone_energy(2u) * 0.15);
+    let speaker = 0.012 / max(abs(length(roof_vector) - 0.045 - bass * 0.035), 0.006);
+    color += bass_color * speaker * controls.values[21] * 0.08;
+
+    let portal_center = zone_position(3u, aspect);
+    let portal_distance = length(uv - portal_center);
+    let portal_radius = controls.values[27] * (1.0 + sky_drive * 0.12);
+    let portal_ring = 0.012 / max(abs(portal_distance - portal_radius), 0.005);
+    let portal_travel = abs(fract(
+        portal_distance * (12.0 + sky_world * 3.0)
+        - uniforms.time * controls.values[28]
+    ) - 0.5);
+    let portal_streak = 0.006 / max(portal_travel, 0.012)
+        * smoothstep(portal_radius * 1.8, 0.02, portal_distance);
+    color += mix(treble_color, full_color, 0.45) * portal_ring
+        * (0.08 + zone_energy(3u) * 0.18 + sky_drive * 0.12);
+    color += treble_color * portal_streak * controls.values[28] * 0.018;
+
+    for (var index = 0u; index < 8u; index += 1u) {
+        if f32(index) >= scene.values[0] {
+            break;
+        }
+        let field = zone_field(uv, index, aspect, falloff);
+        let band = scene.values[8u + index * 8u + 4u];
+        var zone_color = full_color;
+        if band > 0.5 && band < 1.5 {
+            zone_color = bass_color;
+        } else if band < 2.5 && band > 1.5 {
+            zone_color = mid_color;
+        } else if band > 2.5 {
+            zone_color = treble_color;
+        }
+        color += zone_color * field * zone_energy(index) * (0.035 + beat_warp * 0.04);
+    }
+
+    let air_cell = floor(
+        vec2f(world_angle * 80.0, uv.y * 70.0)
+        + vec2f(uniforms.time * 0.7, -uniforms.time * 0.35)
+    );
+    let air = step(1.0 - controls.values[25] * 0.035, hash21(air_cell + scene_seed))
+        * (0.2 + sky_drive * 0.8);
+    color += full_color * air;
+
+    if finish < 0.5 {
+        color *= 0.85 + glow * 0.35;
+    } else if finish < 1.5 {
+        color += pow(max(color, vec3f(0.0)), vec3f(4.0)) * gloss;
+    } else if finish < 2.5 {
+        color *= 0.72;
+    } else if finish < 3.5 {
+        color = mix(color, vec3f(dot(color, vec3f(0.3, 0.55, 0.15))), 0.22 + gloss * 0.25);
+    } else {
+        color = mix(color, color * color + full_color * 0.04, 0.35 + gloss * 0.35);
+    }
+
+    color = saturate_color(color, saturation);
+    color = 1.0 - exp(-color * (0.8 + rms * 1.3 + beat_warp * 0.35));
+    return vec4f(color, 1.0);
+}
