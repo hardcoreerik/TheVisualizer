@@ -20,7 +20,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Automatic default-output recovery timing from detection through stream open and first capture packet
 - Twenty bundled visuals: Neon Scope, Particle Forge, Studio, and seventeen WGSL presets, including Bass Monoliths, Data Storm, Event Horizon, Fractal Reef, Liquid Chrome, Plasma Loom, Quantum Lattice, and Spectral Cathedral
 - Up to eight shared sound zones plus sixteen Particle Forge 3D force nodes with independent band routing, Emit/Attract/Repel/Spin/Vortex behavior, radius, strength, falloff, axis, depth, and pin state
-- A visible `Instrument [I]` panel for scene editing, `Mode [O]` for active-visual controls, `Forge [F]` for the selected 3D force node, and `Performance [P]` for GPU A/B mixing
+- A mode-aware `Instrument [I]` panel with a unique identity, accent, interaction guide, and inline control families for every visual; `Mode [O]` detaches the same active controls, `Forge [F]` inspects the selected 3D force node, and `Performance [P]` owns GPU A/B mixing
 - A searchable, categorized `Visual Library [L]` with session favorites; `H` independently hides visual labels
 - GPU-native Particle Forge compute simulation with 65,536–262,144 XYZ particles, toroidal motion, five topology families, three blendable material treatments, audio modulation routes, fixed quality profiles, and bounded `.glb` mesh attachment
 - Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts

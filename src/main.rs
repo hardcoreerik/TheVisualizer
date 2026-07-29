@@ -47,6 +47,14 @@ const DEFAULT_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const VISUAL_TRAIL_FRAMES: usize = 10;
 const MAX_SOUND_ZONES: usize = 8;
 
+#[derive(Clone, Copy)]
+struct InstrumentProfile {
+    family: &'static str,
+    tagline: &'static str,
+    gesture: &'static str,
+    accent: [u8; 3],
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ZoneBand {
     Full,
@@ -3712,9 +3720,14 @@ impl VisualizerApp {
             return;
         }
 
+        let response_label = if self.visual == 0 {
+            "Trail response"
+        } else {
+            "Field response"
+        };
         ui.add(
             egui::Slider::new(&mut self.gain, 0.25..=6.0)
-                .text("Response")
+                .text(response_label)
                 .fixed_decimals(2),
         );
         if self.visual == 1 {
@@ -4562,11 +4575,22 @@ impl VisualizerApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.set_max_width(480.0);
-                let active_id = self.gpu_preset.as_ref().map(GpuPresetRenderer::active_id);
+                let active_id = self
+                    .gpu_preset
+                    .as_ref()
+                    .map(|renderer| renderer.active_id().to_owned());
+                let mode_id = match self.visual {
+                    0 => "host.neon-scope",
+                    1 => "host.particle-forge",
+                    2 => active_id.as_deref().unwrap_or("host.missing-preset"),
+                    _ => "host.performance-studio",
+                };
+                let profile = instrument_profile(mode_id);
                 let mode_name = match self.visual {
                     0 => "Neon Scope".to_owned(),
                     1 => "Particle Forge".to_owned(),
                     2 => active_id
+                        .as_deref()
                         .and_then(|id| self.presets.iter().find(|preset| preset.id == id))
                         .map_or_else(
                             || "No valid preset".to_owned(),
@@ -4574,6 +4598,39 @@ impl VisualizerApp {
                         ),
                     _ => "Living Photograph".to_owned(),
                 };
+                let accent =
+                    Color32::from_rgb(profile.accent[0], profile.accent[1], profile.accent[2]);
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(
+                        profile.accent[0] / 12,
+                        profile.accent[1] / 12,
+                        profile.accent[2] / 12,
+                        230,
+                    ))
+                    .stroke(Stroke::new(1.0, accent))
+                    .corner_radius(8)
+                    .inner_margin(10)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&mode_name)
+                                    .strong()
+                                    .size(18.0)
+                                    .color(accent),
+                            );
+                            ui.label(
+                                egui::RichText::new(profile.family.to_uppercase())
+                                    .small()
+                                    .monospace()
+                                    .color(Color32::from_rgb(170, 190, 205)),
+                            );
+                        });
+                        ui.label(
+                            egui::RichText::new(profile.tagline)
+                                .small()
+                                .color(Color32::from_rgb(205, 220, 230)),
+                        );
+                    });
                 let mut chosen_visual = None;
                 let mut chosen_preset = None;
                 ui.horizontal(|ui| {
@@ -4604,7 +4661,8 @@ impl VisualizerApp {
                             for (index, preset) in self.presets.iter().enumerate() {
                                 if ui
                                     .selectable_label(
-                                        self.visual == 2 && active_id == Some(preset.id.as_str()),
+                                        self.visual == 2
+                                            && active_id.as_deref() == Some(preset.id.as_str()),
                                         &preset.name,
                                     )
                                     .clicked()
@@ -4637,19 +4695,21 @@ impl VisualizerApp {
                     }
                 });
                 ui.label(
-                    egui::RichText::new(if self.visual == 1 {
-                        "Canvas · left-drag a node to move it · empty-space drag orbits · Shift+wheel moves depth · right-drag tunes"
-                    } else if self.visual == 3 {
-                        "Canvas · right-click toggles the selected layer · right-drag adjusts its scale/reactivity"
-                    } else {
-                        "Canvas · right-click empty adds a zone · right-click a zone cycles its band · right-drag tunes"
-                    })
+                    egui::RichText::new(profile.gesture)
                     .small()
-                    .color(Color32::from_rgb(110, 145, 165)),
+                    .color(accent),
                 );
 
                 if self.visual == 3 {
                     self.draw_studio_controls(ui);
+                } else {
+                    egui::CollapsingHeader::new(format!(
+                        "{} CONTROLS",
+                        profile.family.to_uppercase()
+                    ))
+                    .id_salt(("instrument-mode-controls", mode_id))
+                    .default_open(true)
+                    .show(ui, |ui| self.draw_mode_controls(ui));
                 }
 
                 if self.visual == 3 {
@@ -5788,6 +5848,137 @@ fn preset_category(id: &str) -> &'static str {
     }
 }
 
+fn instrument_profile(id: &str) -> InstrumentProfile {
+    match id {
+        "host.neon-scope" => InstrumentProfile {
+            family: "Waveform",
+            tagline: "Layered oscilloscope trails turn amplitude and timing into luminous calligraphy.",
+            gesture: "Canvas · drag to steer the trail field · wheel changes depth · right-drag tunes response and glow",
+            accent: [60, 245, 220],
+        },
+        "host.particle-forge" => InstrumentProfile {
+            family: "3D Force Field",
+            tagline: "GPU particles orbit, emit, repel, and vortex through a playable three-dimensional forge.",
+            gesture: "Canvas · drag a node to move it · empty-space drag orbits · Shift+wheel moves depth · right-drag tunes force",
+            accent: [255, 90, 40],
+        },
+        "host.performance-studio" => InstrumentProfile {
+            family: "Layer Studio",
+            tagline: "Images, motion, presets, waveforms, and particles combine as one reactive composition.",
+            gesture: "Canvas · right-click toggles the selected layer · right-drag changes scale and reactivity · drag frames the image",
+            accent: [100, 220, 160],
+        },
+        "thevisualizer.aurora-flow" => InstrumentProfile {
+            family: "Aurora Ribbons",
+            tagline: "Spectrum-fed polar ribbons shimmer above a deep reactive horizon.",
+            gesture: "Canvas · drag steers ribbon flow · wheel changes sky depth · zones bend local aurora currents",
+            accent: [70, 255, 190],
+        },
+        "thevisualizer.bass-monoliths" => InstrumentProfile {
+            family: "Monolith City",
+            tagline: "Frequency towers rise from the bass while treble traces their hard luminous edges.",
+            gesture: "Canvas · drag changes the city approach · wheel scales the skyline · zones raise local districts",
+            accent: [255, 170, 40],
+        },
+        "thevisualizer.cascading-falls" => InstrumentProfile {
+            family: "Spectrum Waterfall",
+            tagline: "A mirrored SDR-style spectrum trace writes frequency energy into scrolling history.",
+            gesture: "Canvas · drag shifts the spectral field · wheel changes trace scale · zones emphasize frequency regions",
+            accent: [30, 220, 255],
+        },
+        "thevisualizer.data-storm" => InstrumentProfile {
+            family: "Cyber Weather",
+            tagline: "Audio packets fall through a perspective grid as onsets trigger electrical storms.",
+            gesture: "Canvas · drag redirects packet wind · wheel changes storm depth · zones seed local data bursts",
+            accent: [40, 255, 130],
+        },
+        "thevisualizer.event-horizon" => InstrumentProfile {
+            family: "Relativistic Disk",
+            tagline: "A lensing black hole bends a Doppler-shifted accretion disk, stars, and onset jets.",
+            gesture: "Canvas · drag orbits the horizon · wheel changes lens scale · zones add mass to the local field",
+            accent: [255, 110, 45],
+        },
+        "thevisualizer.feedback-tunnel" => InstrumentProfile {
+            family: "Feedback Tunnel",
+            tagline: "Waveform distortion and spectral timing pull a neon corridor toward the listener.",
+            gesture: "Canvas · drag banks the tunnel · wheel changes forward depth · zones warp nearby tunnel walls",
+            accent: [190, 70, 255],
+        },
+        "thevisualizer.fractal-reef" => InstrumentProfile {
+            family: "Generative Reef",
+            tagline: "Recursive coral branches grow with bass while treble illuminates polyps and drifting life.",
+            gesture: "Canvas · drag moves the underwater current · wheel changes reef scale · zones cultivate local growth",
+            accent: [30, 235, 175],
+        },
+        "thevisualizer.gravity-wells" => InstrumentProfile {
+            family: "Orbital Field",
+            tagline: "Spectrum stars and trails curve through multiple playable gravity wells.",
+            gesture: "Canvas · drag rotates the star field · wheel changes orbital scale · zones become movable gravity wells",
+            accent: [110, 120, 255],
+        },
+        "thevisualizer.kaleido-reactor" => InstrumentProfile {
+            family: "Symmetry Reactor",
+            tagline: "Folded spectral facets feed a radial reactor with configurable symmetry and feedback.",
+            gesture: "Canvas · drag rotates the symmetry axis · wheel changes reactor scale · zones deform individual facets",
+            accent: [255, 60, 190],
+        },
+        "thevisualizer.liquid-chrome" => InstrumentProfile {
+            family: "Fluid Metal",
+            tagline: "Bass merges reflective metaballs while treble races across their chrome highlights.",
+            gesture: "Canvas · drag rolls the liquid surface · wheel changes blob scale · zones pull the fluid into new masses",
+            accent: [190, 225, 255],
+        },
+        "thevisualizer.neon-horizon" => InstrumentProfile {
+            family: "Synthwave Horizon",
+            tagline: "A reactive sun, skyline, and perspective grid turn the spectrum into a night drive.",
+            gesture: "Canvas · drag changes the road heading · wheel changes horizon depth · zones light local skyline sectors",
+            accent: [255, 55, 170],
+        },
+        "thevisualizer.plasma-loom" => InstrumentProfile {
+            family: "Plasma Weave",
+            tagline: "Waveform warp and spectrum weft cross into a charged, twisting fabric.",
+            gesture: "Canvas · drag twists the weave · wheel changes thread scale · zones tighten and energize local crossings",
+            accent: [80, 180, 255],
+        },
+        "thevisualizer.quantum-lattice" => InstrumentProfile {
+            family: "Quantum Grid",
+            tagline: "Layered energy cells tunnel through depth as entangled nodes answer the spectrum.",
+            gesture: "Canvas · drag rolls the lattice · wheel changes tunnel depth · zones fold nearby cells",
+            accent: [80, 255, 245],
+        },
+        "thevisualizer.ripple-garden" => InstrumentProfile {
+            family: "Reactive Garden",
+            tagline: "Organic stems, ripples, and light blooms grow from routed musical energy.",
+            gesture: "Canvas · drag bends the garden current · wheel changes field scale · zones plant new ripple centers",
+            accent: [120, 255, 100],
+        },
+        "thevisualizer.solar-bloom" => InstrumentProfile {
+            family: "Solar Flower",
+            tagline: "Bass opens a radiant bloom while transients launch rays through its layered corona.",
+            gesture: "Canvas · drag turns the bloom · wheel changes corona scale · zones create secondary solar hearts",
+            accent: [255, 185, 40],
+        },
+        "thevisualizer.spectral-cathedral" => InstrumentProfile {
+            family: "Spectral Architecture",
+            tagline: "Audio illuminates stained glass, vaulted aisles, a rose window, and volumetric rays.",
+            gesture: "Canvas · drag changes the aisle perspective · wheel changes cathedral depth · zones illuminate local panes",
+            accent: [120, 150, 255],
+        },
+        "thevisualizer.cityscape" => InstrumentProfile {
+            family: "Living City",
+            tagline: "A complete procedural metropolis routes bands into buildings, crowds, traffic, sky worlds, and physics.",
+            gesture: "Canvas · drag navigates the cylindrical city · wheel changes world scale · zones energize whole districts",
+            accent: [255, 210, 70],
+        },
+        _ => InstrumentProfile {
+            family: "Audio Visual",
+            tagline: "A discovered visual driven by the shared normalized audio and scene controls.",
+            gesture: "Canvas · drag changes the camera · wheel changes scale · right-drag tunes the selected zone",
+            accent: [90, 245, 220],
+        },
+    }
+}
+
 fn preset_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PRESETS", "presets")
 }
@@ -5858,8 +6049,8 @@ mod tests {
         ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
         VisualHistory, ZoneBand, callback_is_new, cargo_resource_directory, default_needs_recovery,
-        lerp_color, living_photo_plant_mask, pacing_delay, rare_bird_progress, shifted_frequency,
-        status_hint, visual_index_for_key,
+        instrument_profile, lerp_color, living_photo_plant_mask, pacing_delay, rare_bird_progress,
+        shifted_frequency, status_hint, visual_index_for_key,
     };
     use eframe::egui::Pos2;
     use std::time::{Duration, Instant};
@@ -5872,6 +6063,28 @@ mod tests {
             cargo_resource_directory(executable, "presets"),
             Some(std::path::PathBuf::from(r"F:\Ai\TheVisualizer\presets"))
         );
+    }
+
+    #[test]
+    fn every_visual_has_a_unique_instrument_profile() {
+        let bundled = crate::preset::discover(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/presets"
+        )));
+        let mut ids = vec![
+            "host.neon-scope".to_owned(),
+            "host.particle-forge".to_owned(),
+            "host.performance-studio".to_owned(),
+        ];
+        ids.extend(bundled.presets.into_iter().map(|preset| preset.id));
+        assert_eq!(ids.len(), 20);
+
+        let mut taglines = std::collections::HashSet::new();
+        for id in ids {
+            let profile = instrument_profile(&id);
+            assert_ne!(profile.family, "Audio Visual", "{id}");
+            assert!(taglines.insert(profile.tagline), "{id}");
+        }
     }
 
     #[test]
