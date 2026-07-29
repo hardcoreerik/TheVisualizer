@@ -81,6 +81,15 @@ impl ZoneBand {
             _ => Self::Full,
         }
     }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Full => Self::Low,
+            Self::Low => Self::Mid,
+            Self::Mid => Self::High,
+            Self::High => Self::Full,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -109,6 +118,7 @@ struct InteractionState {
     selected: Option<usize>,
     drag_origin: Option<Vec2>,
     camera_drag_origin: Option<Vec2>,
+    secondary_drag_origin: Option<Vec2>,
     camera_yaw: f32,
     camera_pitch: f32,
     camera_zoom: f32,
@@ -122,6 +132,7 @@ impl Default for InteractionState {
             selected: Some(0),
             drag_origin: None,
             camera_drag_origin: None,
+            secondary_drag_origin: None,
             camera_yaw: 0.0,
             camera_pitch: 0.05,
             camera_zoom: 1.0,
@@ -166,6 +177,7 @@ impl InteractionState {
             selected: Some(3),
             drag_origin: None,
             camera_drag_origin: None,
+            secondary_drag_origin: None,
             camera_yaw: 0.0,
             camera_pitch: 0.05,
             camera_zoom: 1.0,
@@ -711,12 +723,16 @@ struct VisualizerApp {
     pending_default_switch: Option<Instant>,
     visual: usize,
     overlay: bool,
+    show_text: bool,
     instrument_panel: bool,
+    mode_panel: bool,
     visual_director_panel: bool,
     presentation: PresentationMode,
     frame_limit: FrameLimit,
     last_paced_frame: Instant,
     gain: f32,
+    particle_reverse: bool,
+    particle_gradient_shift: f32,
     started: Instant,
     presets: Vec<Preset>,
     preset_directory: PathBuf,
@@ -781,20 +797,7 @@ impl VisualizerApp {
         let scene_notice =
             (!scene_discovery.errors.is_empty()).then(|| scene_discovery.errors.join("\n"));
         let started = Instant::now();
-        let mut studio = StudioState::default();
-        let living_photograph = asset_directory().join("living-photograph-greenhouse.png");
-        if living_photograph.is_file()
-            && let Err(error) = studio.load_image(&creation.egui_ctx, &living_photograph)
-        {
-            studio.notice = Some(error);
-        }
-        let living_photograph_motion =
-            asset_directory().join("living-photograph-greenhouse-motion.webp");
-        if living_photograph_motion.is_file()
-            && let Err(error) = studio.load_motion(&creation.egui_ctx, &living_photograph_motion)
-        {
-            studio.notice = Some(error);
-        }
+        let studio = bundled_studio(&creation.egui_ctx);
 
         let samples = Arc::new(Mutex::new(SampleBuffer::default()));
         let (capture, capture_error) =
@@ -840,12 +843,16 @@ impl VisualizerApp {
             pending_default_switch: None,
             visual: 0,
             overlay: true,
+            show_text: true,
             instrument_panel: false,
+            mode_panel: false,
             visual_director_panel: false,
             presentation: PresentationMode::Windowed,
             frame_limit: FrameLimit::Display,
             last_paced_frame: started,
             gain,
+            particle_reverse: false,
+            particle_gradient_shift: 0.0,
             started,
             presets: discovery.presets,
             preset_directory,
@@ -1273,6 +1280,7 @@ impl VisualizerApp {
             selected: snapshot.selected_zone,
             drag_origin: None,
             camera_drag_origin: None,
+            secondary_drag_origin: None,
             camera_yaw: snapshot.camera_yaw,
             camera_pitch: snapshot.camera_pitch,
             camera_zoom: snapshot.camera_zoom,
@@ -1407,7 +1415,10 @@ impl VisualizerApp {
             system,
             delete,
             reset,
+            revert,
+            labels,
             instrument,
+            mode_panel,
         ) = ctx.input(|input| {
             (
                 input.key_pressed(egui::Key::Tab),
@@ -1421,8 +1432,11 @@ impl VisualizerApp {
                 input.key_pressed(egui::Key::M),
                 input.key_pressed(egui::Key::S),
                 input.key_pressed(egui::Key::Delete),
-                input.key_pressed(egui::Key::R),
+                input.key_pressed(egui::Key::R) && !input.modifiers.shift,
+                input.key_pressed(egui::Key::R) && input.modifiers.shift,
+                input.key_pressed(egui::Key::L),
                 input.key_pressed(egui::Key::I),
+                input.key_pressed(egui::Key::O),
             )
         });
         let direct_visual = ctx.input(|input| {
@@ -1466,8 +1480,17 @@ impl VisualizerApp {
         if reset {
             self.reset_interaction();
         }
+        if revert {
+            self.revert_all(ctx);
+        }
+        if labels {
+            self.show_text = !self.show_text;
+        }
         if instrument {
             self.instrument_panel = !self.instrument_panel;
+        }
+        if mode_panel {
+            self.mode_panel = !self.mode_panel;
         }
         if borderless {
             self.set_presentation(ctx, self.presentation.toggle_borderless());
@@ -1476,7 +1499,9 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.instrument_panel {
+            if self.mode_panel {
+                self.mode_panel = false;
+            } else if self.instrument_panel {
                 self.instrument_panel = false;
             } else if self.presentation != PresentationMode::Windowed {
                 self.set_presentation(ctx, PresentationMode::Windowed);
@@ -1491,7 +1516,17 @@ impl VisualizerApp {
         if response.secondary_clicked()
             && let Some(pointer) = pointer
         {
-            self.interaction.selected = self.nearest_zone(rect, pointer);
+            if let Some(index) = self.nearest_zone(rect, pointer) {
+                self.interaction.selected = Some(index);
+                self.interaction.zones[index].band = self.interaction.zones[index].band.next();
+            } else if self.visual == 3 {
+                if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
+                    layer.visible = !layer.visible;
+                }
+            } else {
+                self.interaction
+                    .add_zone(normalize_visual_position(rect, pointer));
+            }
         }
         if response.double_clicked()
             && let Some(pointer) = pointer
@@ -1500,7 +1535,7 @@ impl VisualizerApp {
             self.interaction
                 .add_zone(normalize_visual_position(rect, pointer));
         }
-        if response.drag_started()
+        if response.drag_started_by(egui::PointerButton::Primary)
             && let Some(pointer) = pointer
         {
             self.interaction.selected = self.nearest_zone(rect, pointer);
@@ -1515,7 +1550,8 @@ impl VisualizerApp {
                 .is_none()
                 .then(|| Vec2::new(self.interaction.camera_yaw, self.interaction.camera_pitch));
         }
-        if (response.dragged() || response.drag_stopped())
+        if (response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary))
             && let Some(origin) = self.interaction.drag_origin
             && let Some(zone) = self
                 .interaction
@@ -1527,16 +1563,65 @@ impl VisualizerApp {
                 (origin.x + delta.x / rect.width().max(1.0)).clamp(0.0, 1.0),
                 (origin.y + delta.y / rect.height().max(1.0)).clamp(0.0, 1.0),
             );
-        } else if (response.dragged() || response.drag_stopped())
+        } else if (response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary))
             && let Some(origin) = self.interaction.camera_drag_origin
         {
             let delta = response.drag_delta();
             self.interaction.camera_yaw = origin.x - delta.x * 0.008;
             self.interaction.camera_pitch = (origin.y + delta.y * 0.004).clamp(-1.2, 1.2);
         }
-        if response.drag_stopped() {
+        if response.drag_stopped_by(egui::PointerButton::Primary) {
             self.interaction.drag_origin = None;
             self.interaction.camera_drag_origin = None;
+        }
+        if response.drag_started_by(egui::PointerButton::Secondary)
+            && let Some(pointer) = pointer
+        {
+            self.interaction.selected = self.nearest_zone(rect, pointer);
+            self.interaction.secondary_drag_origin = self
+                .interaction
+                .selected
+                .and_then(|index| self.interaction.zones.get(index))
+                .map(|zone| Vec2::new(zone.radius, zone.strength))
+                .or_else(|| {
+                    (self.visual == 3)
+                        .then(|| self.studio.layers.get(self.studio.selected))
+                        .flatten()
+                        .map(|layer| Vec2::new(layer.scale, layer.reactivity))
+                })
+                .or(Some(Vec2::new(self.gain, self.colors.glow)));
+        }
+        if response.dragged_by(egui::PointerButton::Secondary)
+            || response.drag_stopped_by(egui::PointerButton::Secondary)
+        {
+            let delta = response.drag_delta();
+            if let Some(origin) = self.interaction.secondary_drag_origin {
+                if let Some(zone) = self
+                    .interaction
+                    .selected
+                    .and_then(|index| self.interaction.zones.get_mut(index))
+                {
+                    zone.radius =
+                        (origin.x + delta.x / rect.width().max(1.0) * 0.4).clamp(0.04, 0.45);
+                    zone.strength =
+                        (origin.y - delta.y / rect.height().max(1.0) * 3.0).clamp(0.0, 3.0);
+                } else if self.visual == 3 {
+                    if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
+                        layer.scale =
+                            (origin.x + delta.x / rect.width().max(1.0) * 1.65).clamp(0.35, 2.0);
+                        layer.reactivity =
+                            (origin.y - delta.y / rect.height().max(1.0) * 2.0).clamp(0.0, 2.0);
+                    }
+                } else {
+                    self.set_response(origin.x + delta.x / rect.width().max(1.0) * (6.0 - 0.25));
+                    self.colors.glow =
+                        (origin.y - delta.y / rect.height().max(1.0) * 2.0).clamp(0.0, 2.0);
+                }
+            }
+        }
+        if response.drag_stopped_by(egui::PointerButton::Secondary) {
+            self.interaction.secondary_drag_origin = None;
         }
         if response.hovered() {
             let scroll = response.ctx.input(|input| input.smooth_scroll_delta.y);
@@ -1558,6 +1643,56 @@ impl VisualizerApp {
         } else {
             InteractionState::default()
         };
+    }
+
+    fn set_response(&mut self, value: f32) {
+        let response_parameter = (self.visual == 2)
+            .then(|| {
+                self.gpu_preset.as_ref().and_then(|renderer| {
+                    self.presets
+                        .iter()
+                        .find(|preset| preset.id == renderer.active_id())
+                })
+            })
+            .flatten()
+            .and_then(|preset| {
+                preset
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, parameter)| parameter.id == "response")
+            })
+            .map(|(index, parameter)| (index, parameter.minimum, parameter.maximum));
+        self.gain = response_parameter.map_or_else(
+            || value.clamp(0.25, 6.0),
+            |(_, minimum, maximum)| value.clamp(minimum, maximum),
+        );
+        if let Some((index, _, _)) = response_parameter {
+            self.mode_parameters[index] = self.gain;
+        }
+    }
+
+    fn revert_all(&mut self, ctx: &egui::Context) {
+        self.reset_interaction();
+        self.colors = ColorSystem::default();
+        self.studio = bundled_studio(ctx);
+        self.overlay = true;
+        self.show_text = true;
+        self.particle_reverse = false;
+        self.particle_gradient_shift = 0.0;
+        if self.visual == 2
+            && let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
+                self.presets
+                    .iter()
+                    .find(|preset| preset.id == renderer.active_id())
+            })
+        {
+            self.mode_parameters = preset_parameter_defaults(preset);
+            self.gain = preset.response.default;
+        } else {
+            self.gain = 2.2;
+        }
+        self.scene_notice = Some("Reverted session changes to defaults.".to_owned());
     }
 
     fn nearest_zone(&self, rect: Rect, pointer: Pos2) -> Option<usize> {
@@ -1625,7 +1760,7 @@ impl VisualizerApp {
                     color.gamma_multiply(0.72 + energy * 0.25),
                 ),
             ));
-            if selected {
+            if selected && self.show_text {
                 painter.text(
                     center + Vec2::new(marker_size + 7.0, 0.0),
                     egui::Align2::LEFT_CENTER,
@@ -1635,212 +1770,6 @@ impl VisualizerApp {
                 );
             }
         }
-    }
-
-    fn draw_visual_context_menu(&mut self, ui: &mut egui::Ui) {
-        let mut visual = None;
-        let mut preset = None;
-        ui.menu_button("Mode", |ui| {
-            if ui
-                .selectable_label(self.visual == 0, "Neon Scope")
-                .clicked()
-            {
-                visual = Some(0);
-            }
-            if ui
-                .selectable_label(self.visual == 1, "Particle Forge")
-                .clicked()
-            {
-                visual = Some(1);
-            }
-            ui.separator();
-            let active_id = self.gpu_preset.as_ref().map(GpuPresetRenderer::active_id);
-            for (index, candidate) in self.presets.iter().enumerate() {
-                if ui
-                    .selectable_label(active_id == Some(candidate.id.as_str()), &candidate.name)
-                    .clicked()
-                {
-                    visual = Some(2);
-                    preset = Some(index);
-                }
-            }
-        });
-        if let Some(visual) = visual {
-            self.visual = visual;
-        }
-        if let Some(index) = preset {
-            self.load_preset(index);
-        }
-
-        let mut remove = false;
-        ui.menu_button(
-            format!(
-                "Sound Zones ({}/{MAX_SOUND_ZONES})",
-                self.interaction.zones.len()
-            ),
-            |ui| {
-                if ui
-                    .add_enabled(
-                        self.interaction.zones.len() < MAX_SOUND_ZONES,
-                        egui::Button::new("Add at center"),
-                    )
-                    .clicked()
-                {
-                    self.interaction.add_zone(Vec2::new(0.5, 0.5));
-                }
-                if ui.button("Reset zones").clicked() {
-                    self.reset_interaction();
-                }
-                ui.separator();
-                if let Some(zone) = self
-                    .interaction
-                    .selected
-                    .and_then(|index| self.interaction.zones.get_mut(index))
-                {
-                    ui.label("Selected zone");
-                    ui.checkbox(&mut zone.pinned, "Pinned");
-                    ui.add(egui::Slider::new(&mut zone.radius, 0.04..=0.45).text("Radius"));
-                    ui.add(egui::Slider::new(&mut zone.strength, 0.0..=3.0).text("Strength"));
-                    ui.menu_button(format!("Band · {}", zone.band.label()), |ui| {
-                        for band in [ZoneBand::Full, ZoneBand::Low, ZoneBand::Mid, ZoneBand::High] {
-                            ui.radio_value(&mut zone.band, band, band.label());
-                        }
-                    });
-                    remove = ui
-                        .add_enabled(!zone.pinned, egui::Button::new("Remove selected"))
-                        .clicked();
-                } else {
-                    ui.label("Right-click or drag a zone to select it.");
-                }
-            },
-        );
-        if remove {
-            self.interaction.remove_selected();
-        }
-
-        let parameters = self
-            .gpu_preset
-            .as_ref()
-            .and_then(|renderer| {
-                self.presets
-                    .iter()
-                    .find(|preset| preset.id == renderer.active_id())
-            })
-            .map(|preset| preset.parameters.clone());
-        ui.menu_button("Mode Controls", |ui| {
-            if self.visual == 2
-                && let Some(parameters) = &parameters
-            {
-                let mut groups = Vec::new();
-                for parameter in parameters {
-                    if !groups.contains(&parameter.group) {
-                        groups.push(parameter.group.clone());
-                    }
-                }
-                for group in groups {
-                    ui.menu_button(&group, |ui| {
-                        for (index, parameter) in parameters
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, parameter)| parameter.group == group)
-                        {
-                            let changed = ui
-                                .add(
-                                    egui::Slider::new(
-                                        &mut self.mode_parameters[index],
-                                        parameter.minimum..=parameter.maximum,
-                                    )
-                                    .text(&parameter.label),
-                                )
-                                .changed();
-                            if changed && parameter.id == "response" {
-                                self.gain = self.mode_parameters[index];
-                            }
-                        }
-                    });
-                }
-            } else {
-                ui.add(egui::Slider::new(&mut self.gain, 0.25..=6.0).text("Response"));
-            }
-        });
-        ui.menu_button("Color & Material", |ui| {
-            let mut palette = None;
-            ui.menu_button(format!("Palette · {}", self.colors.palette.label()), |ui| {
-                for candidate in PalettePreset::ALL {
-                    if ui
-                        .selectable_label(self.colors.palette == candidate, candidate.label())
-                        .clicked()
-                    {
-                        palette = Some(candidate);
-                    }
-                }
-            });
-            if let Some(palette) = palette {
-                self.colors.apply_palette(palette);
-            }
-            ui.menu_button(format!("Finish · {}", self.colors.finish.label()), |ui| {
-                for finish in SurfaceFinish::ALL {
-                    ui.radio_value(&mut self.colors.finish, finish, finish.label());
-                }
-            });
-            ui.separator();
-            let mut customized = false;
-            for (label, color) in [
-                ("Full range", &mut self.colors.full),
-                ("Bass", &mut self.colors.bass),
-                ("Mid", &mut self.colors.mid),
-                ("Treble", &mut self.colors.treble),
-                ("Background", &mut self.colors.background),
-            ] {
-                ui.horizontal(|ui| {
-                    customized |= ui.color_edit_button_srgba(color).changed();
-                    ui.label(label);
-                });
-            }
-            if customized {
-                self.colors.palette = PalettePreset::Custom;
-            }
-            ui.add(egui::Slider::new(&mut self.colors.glow, 0.0..=2.0).text("Glow"));
-            ui.add(egui::Slider::new(&mut self.colors.gloss, 0.0..=1.0).text("Gloss"));
-            ui.add(egui::Slider::new(&mut self.colors.saturation, 0.0..=1.5).text("Saturation"));
-        });
-        ui.menu_button("Scene", |ui| {
-            ui.checkbox(&mut self.interaction.show_handles, "Show zone handles");
-            if ui.button("Reset interaction").clicked() {
-                self.reset_interaction();
-            }
-        });
-        let mut save_scene = false;
-        let mut restore_scene = None;
-        ui.menu_button("Saved Scenes", |ui| {
-            if ui.button("Save current view").clicked() {
-                save_scene = true;
-                ui.close();
-            }
-            if !self.scenes.is_empty() {
-                ui.separator();
-                for (index, saved) in self.scenes.iter().take(8).enumerate() {
-                    if ui
-                        .button(format!(
-                            "{} · {}",
-                            saved.snapshot.name, saved.snapshot.mode_name
-                        ))
-                        .clicked()
-                    {
-                        restore_scene = Some(index);
-                        ui.close();
-                    }
-                }
-            }
-        });
-        if save_scene {
-            self.save_scene();
-        }
-        if let Some(index) = restore_scene {
-            self.restore_scene(index);
-        }
-        ui.separator();
-        ui.label("Double-click to add · drag to move · R reset · Delete remove");
     }
 
     fn preset_scene_state(&self) -> [f32; PRESET_SCENE_FLOATS] {
@@ -1961,7 +1890,7 @@ impl VisualizerApp {
                 parameters: &parameters,
             },
         );
-        if renderer.active_id() == "thevisualizer.cascading-falls" {
+        if self.show_text && renderer.active_id() == "thevisualizer.cascading-falls" {
             self.draw_waterfall_labels(painter, rect);
         }
     }
@@ -2439,7 +2368,6 @@ impl VisualizerApp {
         blend: StudioBlend,
         drive: f32,
     ) {
-        let time = self.started.elapsed().as_secs_f32();
         let center = rect.center() + Vec2::new(0.0, rect.height() * 0.035);
         let scale = rect.size().min_elem();
         let spectra = if self.visual_history.spectra.is_empty() {
@@ -2454,20 +2382,53 @@ impl VisualizerApp {
                 .map(Vec::as_slice)
                 .collect()
         };
+        self.draw_particle_forge(painter, center, scale, &spectra, opacity, blend, drive, 1);
+
+        let current_spectrum = [self.features.spectrum.as_slice()];
+        for zone in &self.interaction.zones {
+            let zone_drive =
+                drive * (0.45 + zone.band.energy(&self.features) * zone.strength * 1.55);
+            self.draw_particle_forge(
+                painter,
+                visual_position(rect, zone.position),
+                scale * zone.radius * 1.15,
+                &current_spectrum,
+                opacity * 0.9,
+                blend,
+                zone_drive,
+                4,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_particle_forge(
+        &self,
+        painter: &egui::Painter,
+        center: Pos2,
+        scale: f32,
+        spectra: &[&[f32]],
+        opacity: f32,
+        blend: StudioBlend,
+        drive: f32,
+        detail_step: usize,
+    ) {
+        let time = self.started.elapsed().as_secs_f32();
+        let direction = if self.particle_reverse { -1.0 } else { 1.0 };
         let mut current_points = Vec::new();
         for (trail, spectrum) in spectra.iter().enumerate() {
             let age = (trail + 1) as f32 / spectra.len() as f32;
             let time_offset = (1.0 - age) * 0.22;
-            for (index, energy) in spectrum.iter().enumerate() {
+            for (index, energy) in spectrum.iter().enumerate().step_by(detail_step) {
                 let frequency = index as f32 / (spectrum.len() - 1) as f32;
                 let value = (energy * self.gain * drive).clamp(0.0, 1.0);
                 let angle = std::f32::consts::TAU * frequency - std::f32::consts::FRAC_PI_2
-                    + time * (0.035 + value * 0.12)
-                    - time_offset;
+                    + direction * (time * (0.035 + value * 0.12) - time_offset);
                 let radius = scale * (0.15 + frequency.powf(0.72) * 0.27 + value * 0.31);
                 let point = center + Vec2::new(angle.cos() * radius, angle.sin() * radius * 0.78);
                 let color = Self::studio_color(
-                    self.colors.spectrum_color(frequency),
+                    self.colors
+                        .spectrum_color(shifted_frequency(frequency, self.particle_gradient_shift)),
                     opacity * (0.12 + age * 0.7),
                     blend,
                 );
@@ -2803,6 +2764,13 @@ impl VisualizerApp {
                             {
                                 self.instrument_panel = !self.instrument_panel;
                             }
+                            if ui
+                                .selectable_label(self.mode_panel, "Mode [O]")
+                                .on_hover_text("Open controls specific to the active visual.")
+                                .clicked()
+                            {
+                                self.mode_panel = !self.mode_panel;
+                            }
                         });
                         let details_label = if self.visual == 2 && !self.plugins.is_empty() {
                             "DETAILS & EXTENSIONS"
@@ -2956,15 +2924,16 @@ impl VisualizerApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "<-/-> visual · Up/Down preset · I instrument · Right-click visual · Tab · Esc",
+                                "<-/-> visual · Up/Down preset · I instrument · L labels · Shift+R revert · Tab · Esc",
                             )
                             .small()
                             .color(Color32::from_rgb(110, 130, 150)),
                         )
                         .on_hover_text(
                             "Left/Right cycles visuals; 1/2/3/4 selects one directly; Up/Down changes \
-                             GPU presets; I opens the Instrument Panel; right-click opens the compact \
-                             menu; Tab hides the overlay; Escape closes the panel or returns to \
+                             GPU presets; I opens the Instrument Panel; right-click/right-drag acts \
+                             directly on the canvas; L hides visual text; Shift+R reverts session \
+                             changes; Tab hides the overlay; Escape closes the panel or returns to \
                              windowed mode before exiting.",
                         );
                     });
@@ -3160,6 +3129,100 @@ impl VisualizerApp {
         }
     }
 
+    fn draw_mode_controls(&mut self, ui: &mut egui::Ui) {
+        let preset = self.gpu_preset.as_ref().and_then(|renderer| {
+            self.presets
+                .iter()
+                .find(|preset| preset.id == renderer.active_id())
+                .cloned()
+        });
+        if self.visual == 2
+            && let Some(preset) = preset
+        {
+            if ui.button("Reset mode controls").clicked() {
+                self.mode_parameters = preset_parameter_defaults(&preset);
+                self.gain = preset.response.default;
+            }
+            let mut groups = Vec::new();
+            for parameter in &preset.parameters {
+                if !groups.contains(&parameter.group) {
+                    groups.push(parameter.group.clone());
+                }
+            }
+            for group in groups {
+                egui::CollapsingHeader::new(&group)
+                    .id_salt(("mode-parameter-group", &group))
+                    .default_open(group == "Audio")
+                    .show(ui, |ui| {
+                        if ui.small_button("Reset group").clicked() {
+                            for (index, parameter) in preset
+                                .parameters
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, parameter)| parameter.group == group)
+                            {
+                                self.mode_parameters[index] = parameter.default;
+                                if parameter.id == "response" {
+                                    self.gain = parameter.default;
+                                }
+                            }
+                        }
+                        for (index, parameter) in preset
+                            .parameters
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, parameter)| parameter.group == group)
+                        {
+                            let changed = ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.mode_parameters[index],
+                                        parameter.minimum..=parameter.maximum,
+                                    )
+                                    .text(&parameter.label)
+                                    .fixed_decimals(2),
+                                )
+                                .changed();
+                            if changed && parameter.id == "response" {
+                                self.gain = self.mode_parameters[index];
+                            }
+                        }
+                    });
+            }
+            return;
+        }
+
+        ui.add(
+            egui::Slider::new(&mut self.gain, 0.25..=6.0)
+                .text("Response")
+                .fixed_decimals(2),
+        );
+        if self.visual == 1 {
+            ui.checkbox(&mut self.particle_reverse, "Reverse direction");
+            gradient_value_control(
+                ui,
+                "Gradient shift",
+                &mut self.particle_gradient_shift,
+                0.0,
+                1.0,
+                self.colors.bass,
+                self.colors.treble,
+            );
+        }
+    }
+
+    fn draw_mode_panel(&mut self, ctx: &egui::Context) {
+        let mut open = self.mode_panel;
+        egui::Window::new("MODE CONTROLS")
+            .id(egui::Id::new("mode-panel"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -20.0])
+            .default_width(340.0)
+            .resizable(true)
+            .open(&mut open)
+            .show(ctx, |ui| self.draw_mode_controls(ui));
+        self.mode_panel = open;
+    }
+
     fn draw_instrument_panel(&mut self, ctx: &egui::Context) {
         let mut open = self.instrument_panel;
         egui::Window::new("INSTRUMENT")
@@ -3232,6 +3295,24 @@ impl VisualizerApp {
                 if let Some(index) = chosen_preset {
                     self.load_preset(index);
                 }
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.show_text, "Show visual text [L]");
+                    if ui.button("Mode controls [O]").clicked() {
+                        self.mode_panel = true;
+                    }
+                    if ui.button("Revert all [Shift+R]").clicked() {
+                        self.revert_all(ctx);
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(if self.visual == 3 {
+                        "Canvas · right-click toggles the selected layer · right-drag adjusts its scale/reactivity"
+                    } else {
+                        "Canvas · right-click empty adds a zone · right-click a zone cycles its band · right-drag tunes"
+                    })
+                    .small()
+                    .color(Color32::from_rgb(110, 145, 165)),
+                );
 
                 if self.visual == 3 {
                     self.draw_studio_controls(ui);
@@ -3771,77 +3852,6 @@ impl VisualizerApp {
                     }
                 });
 
-                egui::CollapsingHeader::new("Mode Controls")
-                    .id_salt("instrument-mode-controls")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        let preset = self.gpu_preset.as_ref().and_then(|renderer| {
-                            self.presets
-                                .iter()
-                                .find(|preset| preset.id == renderer.active_id())
-                                .cloned()
-                        });
-                        if self.visual == 2
-                            && let Some(preset) = preset
-                        {
-                            if ui.button("Reset all mode controls").clicked() {
-                                self.mode_parameters = preset_parameter_defaults(&preset);
-                                self.gain = preset.response.default;
-                            }
-                            let mut groups = Vec::new();
-                            for parameter in &preset.parameters {
-                                if !groups.contains(&parameter.group) {
-                                    groups.push(parameter.group.clone());
-                                }
-                            }
-                            for group in groups {
-                                egui::CollapsingHeader::new(&group)
-                                    .id_salt(("instrument-parameter-group", &group))
-                                    .default_open(group == "Audio")
-                                    .show(ui, |ui| {
-                                        if ui.small_button("Reset group").clicked() {
-                                            for (index, parameter) in
-                                                preset.parameters.iter().enumerate().filter(
-                                                    |(_, parameter)| parameter.group == group,
-                                                )
-                                            {
-                                                self.mode_parameters[index] = parameter.default;
-                                                if parameter.id == "response" {
-                                                    self.gain = parameter.default;
-                                                }
-                                            }
-                                        }
-                                        for (index, parameter) in preset
-                                            .parameters
-                                            .iter()
-                                            .enumerate()
-                                            .filter(|(_, parameter)| parameter.group == group)
-                                        {
-                                            let changed = ui
-                                                .add(
-                                                    egui::Slider::new(
-                                                        &mut self.mode_parameters[index],
-                                                        parameter.minimum..=parameter.maximum,
-                                                    )
-                                                    .text(&parameter.label)
-                                                    .fixed_decimals(2),
-                                                )
-                                                .changed();
-                                            if changed && parameter.id == "response" {
-                                                self.gain = self.mode_parameters[index];
-                                            }
-                                        }
-                                    });
-                            }
-                        } else {
-                            ui.add(
-                                egui::Slider::new(&mut self.gain, 0.25..=6.0)
-                                    .text("Response")
-                                    .fixed_decimals(2),
-                            );
-                        }
-                    });
-
                 egui::CollapsingHeader::new("Colors & Materials")
                     .id_salt("instrument-colors")
                     .show(ui, |ui| {
@@ -3942,7 +3952,7 @@ impl VisualizerApp {
                 ui.separator();
                 ui.label(
                     egui::RichText::new(
-                        "Drag zones · drag empty space to orbit · wheel to zoom · Esc closes panel",
+                        "Left-drag zones · left-drag empty space to orbit · wheel zooms · R resets interaction",
                     )
                     .small()
                     .color(Color32::from_rgb(110, 145, 165)),
@@ -4106,12 +4116,14 @@ impl eframe::App for VisualizerApp {
         self.interact_visual(&response, rect);
         self.draw_visual(&ui.painter_at(rect), rect);
         self.draw_zone_handles(&ui.painter_at(rect), rect);
-        response.context_menu(|ui| self.draw_visual_context_menu(ui));
-        if self.overlay {
+        if self.overlay && self.show_text {
             self.draw_overlay(ui.ctx());
         }
         if self.instrument_panel {
             self.draw_instrument_panel(ui.ctx());
+        }
+        if self.mode_panel {
+            self.draw_mode_panel(ui.ctx());
         }
         if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
             ui.painter().rect_filled(
@@ -4146,6 +4158,10 @@ fn visual_position(rect: Rect, position: Vec2) -> Pos2 {
         egui::lerp(rect.left()..=rect.right(), position.x),
         egui::lerp(rect.top()..=rect.bottom(), position.y),
     )
+}
+
+fn shifted_frequency(frequency: f32, shift: f32) -> f32 {
+    (frequency + shift).rem_euclid(1.0)
 }
 
 fn gradient_value_control(
@@ -4285,6 +4301,23 @@ fn asset_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_ASSETS", "assets")
 }
 
+fn bundled_studio(ctx: &egui::Context) -> StudioState {
+    let mut studio = StudioState::default();
+    let image = asset_directory().join("living-photograph-greenhouse.png");
+    if image.is_file()
+        && let Err(error) = studio.load_image(ctx, &image)
+    {
+        studio.notice = Some(error);
+    }
+    let motion = asset_directory().join("living-photograph-greenhouse-motion.webp");
+    if motion.is_file()
+        && let Err(error) = studio.load_motion(ctx, &motion)
+    {
+        studio.notice = Some(error);
+    }
+    studio
+}
+
 fn plugin_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PLUGINS", "plugins")
 }
@@ -4308,8 +4341,8 @@ mod tests {
     use super::{
         ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
-        VisualHistory, callback_is_new, default_needs_recovery, lerp_color,
-        living_photo_plant_mask, pacing_delay, rare_bird_progress, status_hint,
+        VisualHistory, ZoneBand, callback_is_new, default_needs_recovery, lerp_color,
+        living_photo_plant_mask, pacing_delay, rare_bird_progress, shifted_frequency, status_hint,
         visual_index_for_key,
     };
     use eframe::egui::Pos2;
@@ -4353,6 +4386,17 @@ mod tests {
         colors.apply_palette(PalettePreset::Inferno);
         assert_eq!(colors.bass, eframe::egui::Color32::from_rgb(255, 35, 15));
         assert_eq!(colors.treble, eframe::egui::Color32::from_rgb(255, 220, 75));
+    }
+
+    #[test]
+    fn zone_band_cycle_returns_to_full_range() {
+        let band = ZoneBand::Full.next().next().next().next();
+        assert!(band == ZoneBand::Full);
+    }
+
+    #[test]
+    fn particle_gradient_shift_wraps_around() {
+        assert!((shifted_frequency(0.8, 0.35) - 0.15).abs() < f32::EPSILON * 4.0);
     }
 
     #[test]
