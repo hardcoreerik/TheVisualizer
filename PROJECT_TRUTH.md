@@ -50,7 +50,9 @@ This document records verified project state. Planned behavior belongs in the [R
 - Case-insensitive discovery of bounded single-file `.tvpreset` packages containing strict format, identity, author, license, response-parameter, and WGSL metadata.
 - Manual or optional 500 ms preset-directory refresh and keyboard/dropdown selection. The host compiles replacements inside a wgpu validation scope and retains the last working pipeline when validation fails.
 - Startup skips rejected preset shaders until one compiles, and refresh can initialize the GPU renderer after starting with no valid shader.
-- Nine repository-owned format-2 WGSL presets with 10–35 grouped controls: Aurora Flow, Cascading Falls, Feedback Tunnel, Gravity Wells, Kaleido Reactor, Neon Horizon, Ripple Garden, Solar Bloom, and TheVisualCityScape. Cascading Falls reads the bounded spectrum history through a host-owned GPU storage buffer.
+- Seventeen repository-owned format-2 WGSL presets with 12–35 grouped controls. The original nine remain present; Bass Monoliths, Data Storm, Event Horizon, Fractal Reef, Liquid Chrome, Plasma Loom, Quantum Lattice, and Spectral Cathedral add distinct architectural, cyber, cosmic, organic, and energy treatments. Cascading Falls reads bounded spectrum history through a host-owned GPU storage buffer.
+- `L` opens a searchable Visual Library that categorizes all seventeen presets plus Neon Scope, Particle Forge, and Studio into a twenty-visual inventory and supports up to 32 session favorites. `H` independently toggles visual labels. The compact overlay retains four direct visual-family buttons and previous/next preset controls instead of duplicating the complete preset list.
+- Cargo-built debug and release executables locate repository `presets` and `assets` through their `target\<profile>` ancestry when no beside-executable resource folder exists. Portable packages continue to prefer resources beside the executable.
 - Shared interaction state for up to eight draggable sound zones, camera yaw/pitch/zoom, seven named palettes plus Custom, five material finishes, per-band colors, glow, gloss, and saturation.
 - Strict, bounded `.tvscene` save/discovery/restore for named host-owned views containing mode identity, forty finite parameter slots, routed colors/materials, camera, and up to eight zones. Missing presets and malformed, oversized, duplicate-key, non-finite, or out-of-range scene files fail visibly without executing code.
 - TheVisualCityScape starts with four pinned Bass/Mid/Treble/Full routes and exposes 35 controls across nine groups.
@@ -78,7 +80,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - One repository-owned Windows example plugin implementing initialize, synchronous feature processing, bounded response output, and shutdown without receiving audio ownership or GPU/window handles.
 - An optional `THEVISUALIZER_PLUGINS` directory override for focused discovery and packaging checks.
 - A guarded Windows x86_64 packaging script that builds the locked release workspace and stages a portable local-test archive under `dist`.
-- The portable package script stages the player, all nine bundled preset files, the example-plugin manifest and DLL, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums.
+- The portable package script stages the player, all seventeen bundled preset files, the example-plugin manifest and DLL, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums.
 - The package script stages the bundled Studio still, animated WebP, and their provenance record.
 - The staged plugin manifest uses a package-relative DLL path; no development-machine path is included in packaged text or manifests.
 - Apache-2.0 project licensing with a canonical `LICENSE`, contributor `NOTICE`, manifest metadata, and a recorded compatibility/provenance policy.
@@ -90,10 +92,11 @@ This document records verified project state. Planned behavior belongs in the [R
 - A repository-owned SVG waveform mark, derived PNG, and embedded native application/window icon. The running app does not depend on an external icon file.
 - Display-synchronized, 60 FPS, and 30 FPS host-side frame pacing selectable beside the measured application cadence in the details disclosure.
 - Visible `1 Scope`, `2 Particles`, `3 Preset`, and `4 Studio` controls with matching number-key selection, Left/Right cycling, and a portable ASCII shortcut footer.
-- Forty-five focused player tests cover the existing analysis, capture, interaction, Studio, Performance Studio, MIDI/OSC mapping, preset, scene, and Visual Director contracts plus Particle Forge quality budgets, force-node bounds, modulation clamping, and complete state round-trips. Separate SDK and example-plugin lifecycle tests also pass.
+- Forty-seven focused player tests cover the existing analysis, capture, interaction, Studio, Performance Studio, MIDI/OSC mapping, preset, scene, and Visual Director contracts plus Cargo resource discovery, compilation of every bundled WGSL shader, Particle Forge quality budgets, force-node bounds, modulation clamping, and complete state round-trips. Separate SDK and example-plugin lifecycle tests also pass.
 
 ## Runtime-observed results
 
+- On 2026-07-29, fresh preset discovery accepted all seventeen format-2 packages and a wgpu device validation scope compiled every bundled WGSL shader without an error. This is shader-contract validation, not visual or performance acceptance of the eight new scenes.
 - `cargo check --workspace` completed successfully on 2026-07-27.
 - `cargo test --workspace` passed 28 tests with 0 failures on 2026-07-27.
 - `cargo clippy --workspace -- -D warnings` completed successfully on 2026-07-27.

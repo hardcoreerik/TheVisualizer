@@ -85,9 +85,10 @@ Set-Content -LiteralPath (Join-Path $pluginPath "example.tvplugin") -Value $plug
 TheVisualizer $($package.version) - Windows x86_64 local test
 
 Run thevisualizer.exe. The player starts on the default Windows system-output loopback source.
-Use S/M for automatic system/microphone input, left/right for visual directions, up/down for
-GPU presets, B for borderless, F11 for fullscreen, Tab for the overlay, and Escape to return or exit.
-Right-click the visual for sound zones, mode controls, palettes, materials, and scene controls.
+Use S/M for automatic system/microphone input, L for the 20-mode Visual Library, H for labels,
+up/down for GPU presets, I/O/F/P for instrument panels, B for borderless, F11 for fullscreen,
+Tab for the overlay, and Escape to return or exit. Canvas clicks and drags directly edit the
+active visual; right-click never opens a duplicate context menu.
 
 The bundled native plugin remains disabled until you review its path and SHA-256 identity and
 select Approve & Load. Native code runs with your user privileges and is not sandboxed.
