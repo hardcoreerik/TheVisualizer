@@ -1,15 +1,19 @@
 use std::{
-    fs,
+    fs::{self, File},
+    io::BufReader,
     path::{Path, PathBuf},
 };
 
 use eframe::egui::{self, TextureHandle, TextureOptions};
-use image::{ImageReader, Limits};
+use image::{AnimationDecoder, ImageReader, Limits, codecs::webp::WebPDecoder};
 
 pub const MAX_STUDIO_LAYERS: usize = 8;
 const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_EDGE: u32 = 8_192;
 const MAX_IMAGE_ALLOC_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_MOTION_FRAMES: usize = 64;
+const MAX_MOTION_ALLOC_BYTES: usize = 192 * 1024 * 1024;
+const MOTION_FPS: f32 = 24.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StudioLayerKind {
@@ -129,6 +133,15 @@ pub struct StudioImage {
     pub path: PathBuf,
     pub size: [usize; 2],
     pub texture: TextureHandle,
+    pub motion: Option<StudioMotion>,
+}
+
+pub struct StudioMotion {
+    frames: Vec<egui::ColorImage>,
+    pub texture: TextureHandle,
+    pub mix: f32,
+    phase: f32,
+    frame: usize,
 }
 
 pub struct StudioState {
@@ -238,9 +251,111 @@ impl StudioState {
             path: path.to_owned(),
             size,
             texture,
+            motion: None,
         });
         self.notice = Some(format!("Loaded image · {}", path.display()));
         Ok(())
+    }
+
+    pub fn load_motion(&mut self, context: &egui::Context, path: &Path) -> Result<(), String> {
+        let image = self
+            .image
+            .as_mut()
+            .ok_or_else(|| "Load the base image before its motion clip.".to_owned())?;
+        let decoder =
+            WebPDecoder::new(BufReader::new(File::open(path).map_err(|error| {
+                format!("Could not open motion {}: {error}", path.display())
+            })?))
+            .map_err(|error| format!("Could not decode motion {}: {error}", path.display()))?;
+        if !decoder.has_animation() {
+            return Err(format!("Motion asset is not animated: {}", path.display()));
+        }
+
+        let mut frames = Vec::new();
+        let mut decoded_bytes = 0usize;
+        let mut motion_size = None;
+        for frame in decoder.into_frames() {
+            if frames.len() == MAX_MOTION_FRAMES {
+                return Err(format!("Motion asset exceeds {MAX_MOTION_FRAMES} frames"));
+            }
+            let rgba = frame
+                .map_err(|error| format!("Could not decode motion frame: {error}"))?
+                .into_buffer();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            if size[0] > MAX_IMAGE_EDGE as usize || size[1] > MAX_IMAGE_EDGE as usize {
+                return Err("Motion frame exceeds the image dimension limit".to_owned());
+            }
+            if motion_size.is_some_and(|expected| expected != size) {
+                return Err(format!(
+                    "Motion frames do not share one resolution (found {}x{})",
+                    size[0], size[1]
+                ));
+            }
+            motion_size = Some(size);
+            decoded_bytes = decoded_bytes.saturating_add(rgba.as_raw().len());
+            if decoded_bytes > MAX_MOTION_ALLOC_BYTES {
+                return Err("Motion asset exceeds the 192 MiB decoded limit".to_owned());
+            }
+            frames.push(egui::ColorImage::from_rgba_unmultiplied(
+                size,
+                rgba.as_raw(),
+            ));
+        }
+        if frames.len() < 2 {
+            return Err("Motion asset needs at least two frames".to_owned());
+        }
+        let texture = context.load_texture(
+            format!("studio-motion:{}", path.display()),
+            frames[0].clone(),
+            TextureOptions::LINEAR,
+        );
+        image.motion = Some(StudioMotion {
+            frames,
+            texture,
+            mix: 0.0,
+            phase: 0.0,
+            frame: 0,
+        });
+        Ok(())
+    }
+
+    pub fn animate_motion(
+        &mut self,
+        context: &egui::Context,
+        delta: f32,
+        [low, mid, high, rms, onset]: [f32; 5],
+    ) {
+        let Some(motion) = self.image.as_mut().and_then(|image| image.motion.as_mut()) else {
+            return;
+        };
+        let target =
+            (low * 0.45 + mid * 0.9 + high * 0.3 + rms * 1.8 + onset * 0.6).clamp(0.0, 1.0);
+        let smoothing = if target > motion.mix { 0.22 } else { 0.045 };
+        motion.mix += (target - motion.mix) * smoothing;
+
+        let speed = 0.12 + low * 0.5 + mid * 1.7 + high * 0.8 + onset * 1.8;
+        motion.phase += delta.clamp(0.0, 0.1) * MOTION_FPS * speed;
+        let frame = ping_pong_frame(motion.phase as usize, motion.frames.len());
+        if frame != motion.frame {
+            motion.frame = frame;
+            motion
+                .texture
+                .set(motion.frames[frame].clone(), TextureOptions::LINEAR);
+            context.request_repaint();
+        }
+    }
+}
+
+fn ping_pong_frame(frame: usize, frame_count: usize) -> usize {
+    let cycle = frame_count.saturating_sub(1) * 2;
+    if cycle == 0 {
+        return 0;
+    }
+    let frame = frame % cycle;
+    if frame < frame_count {
+        frame
+    } else {
+        cycle - frame
     }
 }
 
@@ -282,5 +397,34 @@ mod tests {
         assert!(size[0] > size[1]);
         assert!(size[0] <= MAX_IMAGE_EDGE as usize);
         assert!(size[1] <= MAX_IMAGE_EDGE as usize);
+    }
+
+    #[test]
+    fn motion_frames_ping_pong_without_a_seam() {
+        assert_eq!(
+            (0..9)
+                .map(|frame| ping_pong_frame(frame, 4))
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 2, 1, 0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn bundled_living_photograph_motion_decodes() {
+        let mut studio = StudioState::default();
+        let context = egui::Context::default();
+        studio
+            .load_image(
+                &context,
+                Path::new("assets/living-photograph-greenhouse.png"),
+            )
+            .unwrap();
+        studio
+            .load_motion(
+                &context,
+                Path::new("assets/living-photograph-greenhouse-motion.webp"),
+            )
+            .unwrap();
+        assert_eq!(studio.image.unwrap().motion.unwrap().frames.len(), 49);
     }
 }

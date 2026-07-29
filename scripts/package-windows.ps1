@@ -62,6 +62,7 @@ New-Item -ItemType Directory -Path $presetPath, $assetPath, $pluginPath, (Join-P
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer.exe") -Destination $stagePath
 Copy-Item -Path (Join-Path $repoRoot "presets\*.tvpreset") -Destination $presetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse.png") -Destination $assetPath
+Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse-motion.webp") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\README.md") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer_example_plugin.dll") -Destination $pluginPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\README.md") -Destination $sdkPath
@@ -108,6 +109,7 @@ a signed installer or a public release.
 $required = @(
     "thevisualizer.exe",
     "assets\living-photograph-greenhouse.png",
+    "assets\living-photograph-greenhouse-motion.webp",
     "assets\README.md",
     "plugins\example.tvplugin",
     "plugins\thevisualizer_example_plugin.dll",

@@ -783,6 +783,13 @@ impl VisualizerApp {
         {
             studio.notice = Some(error);
         }
+        let living_photograph_motion =
+            asset_directory().join("living-photograph-greenhouse-motion.webp");
+        if living_photograph_motion.is_file()
+            && let Err(error) = studio.load_motion(&creation.egui_ctx, &living_photograph_motion)
+        {
+            studio.notice = Some(error);
+        }
 
         let samples = Arc::new(Mutex::new(SampleBuffer::default()));
         let (capture, capture_error) =
@@ -2009,10 +2016,16 @@ impl VisualizerApp {
         };
         let source_aspect = image.size[0] as f32 / image.size[1].max(1) as f32;
         let target_aspect = rect.width() / rect.height().max(1.0);
+        let has_motion = image.motion.is_some();
         let zoom = (self.interaction.camera_zoom
             * layer.scale
-            * (1.0 + energy * layer.reactivity * 0.055))
-            .clamp(0.4, 4.0);
+            * (1.0
+                + if has_motion {
+                    0.0
+                } else {
+                    energy * layer.reactivity * 0.055
+                }))
+        .clamp(0.4, 4.0);
         let (mut uv_width, mut uv_height) = if source_aspect > target_aspect {
             (target_aspect / source_aspect, 1.0)
         } else {
@@ -2031,6 +2044,23 @@ impl VisualizerApp {
             ),
             Vec2::new(uv_width, uv_height),
         );
+        if let Some(motion) = &image.motion {
+            painter.image(
+                image.texture.id(),
+                rect,
+                uv,
+                Color32::from_white_alpha((255.0 * layer.opacity.clamp(0.0, 1.0)) as u8),
+            );
+            painter.image(
+                motion.texture.id(),
+                rect,
+                uv,
+                Color32::from_white_alpha(
+                    (255.0 * layer.opacity.clamp(0.0, 1.0) * motion.mix) as u8,
+                ),
+            );
+            return;
+        }
         let time = self.started.elapsed().as_secs_f32();
         let motion = layer.reactivity;
         let mut mesh = egui::Mesh::with_texture(image.texture.id());
@@ -3887,6 +3917,17 @@ impl eframe::App for VisualizerApp {
         }
         self.update_default_device();
         self.update_features();
+        self.studio.animate_motion(
+            ctx,
+            (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1),
+            [
+                self.features.low,
+                self.features.mid,
+                self.features.high,
+                self.features.rms,
+                self.features.onset,
+            ],
+        );
         self.update_plugin();
         ctx.request_repaint_after(
             self.frame_limit
