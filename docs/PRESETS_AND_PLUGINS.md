@@ -28,7 +28,7 @@ The host exposes five fixed-size bind-group entries:
 
 Bindings 0–2 remain layout-compatible with format 1. Format-2 presets use the scene and parameter buffers without receiving GPU/window handles or allocating host buffers. The fixed bounds prevent preset-controlled buffer allocation.
 
-The player discovers `.tvpreset` extensions case-insensitively beside the executable or from the working-directory `presets` folder; `THEVISUALIZER_PRESETS` overrides that location for focused testing. Startup skips rejected shaders until one compiles, and refresh can initialize the GPU renderer after an initially invalid or empty directory. The eight bundled presets are Aurora Flow, Feedback Tunnel, Gravity Wells, Kaleido Reactor, Neon Horizon, Ripple Garden, Solar Bloom, and TheVisualCityScape. Each is format 2 with 10–35 grouped controls. Automatic directory watching, an editor, remote downloads, and a marketplace are outside v0.1.
+The player discovers `.tvpreset` extensions case-insensitively beside the executable or from the working-directory `presets` folder; `THEVISUALIZER_PRESETS` overrides that location for focused testing. Startup skips rejected shaders until one compiles, and refresh can initialize the GPU renderer after an initially invalid or empty directory. Optional live reload polls the bounded preset directory every 500 ms and retains the last working pipeline when a replacement fails validation. The nine bundled presets are Aurora Flow, Cascading Falls, Feedback Tunnel, Gravity Wells, Kaleido Reactor, Neon Horizon, Ripple Garden, Solar Bloom, and TheVisualCityScape. Each is format 2 with 10–35 grouped controls. A visual editor, remote downloads, and a marketplace remain outside v0.1.
 
 ### Trusted native plugins
 
