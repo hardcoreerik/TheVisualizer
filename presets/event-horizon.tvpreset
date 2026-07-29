@@ -1,21 +1,32 @@
 //! format: 2
 //! id: thevisualizer.event-horizon
 //! name: Event Horizon
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
 //! parameter: Audio|response|Response|0.4|5.0|1.8
 //! parameter: Audio|bass-mass|Bass Mass|0.0|3.0|1.5
-//! parameter: Audio|treble-jets|Treble Jets|0.0|3.0|1.3
-//! parameter: Horizon|radius|Radius|0.08|0.65|0.25
-//! parameter: Horizon|lensing|Lensing|0.0|4.0|1.4
-//! parameter: Disk|disk-width|Disk Width|0.01|0.4|0.09
-//! parameter: Disk|disk-speed|Disk Speed|-4.0|4.0|0.7
-//! parameter: Disk|heat|Heat|0.0|4.0|1.5
-//! parameter: Jets|jet-strength|Jet Strength|0.0|4.0|1.2
-//! parameter: Stars|star-density|Star Density|0.0|1.0|0.65
-//! parameter: Camera|orbit|Orbit|-2.0|2.0|0.06
-//! parameter: Surface|exposure|Exposure|0.2|3.0|0.9
+//! parameter: Audio|treble-stars|Treble Stars|0.0|3.0|1.2
+//! parameter: Audio|onset-jets|Onset Jets|0.0|3.0|1.1
+//! parameter: Black Hole|radius|Shadow Radius|0.08|0.55|0.22
+//! parameter: Black Hole|lensing|Lensing|0.2|4.0|1.65
+//! parameter: Black Hole|photon-ring|Photon Ring|0.0|3.0|1.25
+//! parameter: Accretion Disk|disk-width|Disk Width|0.015|0.35|0.11
+//! parameter: Accretion Disk|disk-speed|Disk Speed|-3.0|3.0|0.42
+//! parameter: Accretion Disk|disk-heat|Disk Heat|0.2|4.0|1.7
+//! parameter: Accretion Disk|turbulence|Turbulence|0.0|3.0|1.35
+//! parameter: Accretion Disk|doppler|Doppler Beaming|0.0|3.0|1.45
+//! parameter: Deep Space|star-density|Star Density|0.05|1.0|0.72
+//! parameter: Deep Space|star-depth|Star Depth|0.2|3.0|1.4
+//! parameter: Deep Space|nebula|Nebula|0.0|2.0|0.48
+//! parameter: Relativistic Jets|jet-strength|Jet Strength|0.0|4.0|1.15
+//! parameter: Relativistic Jets|jet-length|Jet Length|0.2|3.0|1.3
+//! parameter: Camera|inclination|Inclination|0.08|0.9|0.34
+//! parameter: Camera|orbit|Orbit|-2.0|2.0|0.05
+//! parameter: Camera|drift|Camera Drift|0.0|1.0|0.18
+//! parameter: Lens|exposure|Exposure|0.2|3.0|1.08
+//! parameter: Lens|bloom|Bloom|0.0|3.0|1.3
+//! parameter: Lens|film-grain|Film Grain|0.0|1.0|0.16
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
@@ -32,37 +43,153 @@ struct ModeParameters { values: array<f32, 40> }
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
-    let res = max(uniforms.resolution, vec2f(1.0));
-    var uv = (p.xy * 2.0 - res) / res.y;
-    uv /= max(scene.values[4], 0.35);
+
+fn hash21(p: vec2f) -> f32 {
+    var q = fract(p * vec2f(123.34, 345.45));
+    q += dot(q, q + 34.345);
+    return fract(q.x * q.y);
+}
+
+fn noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x),
+               mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0)), u.x), u.y);
+}
+
+fn fbm(point: vec2f) -> f32 {
+    var p = point;
+    var sum = 0.0;
+    var amplitude = 0.5;
+    for (var i = 0; i < 5; i++) {
+        sum += amplitude * noise(p);
+        p = mat2x2f(1.62, 1.18, -1.18, 1.62) * p + 7.13;
+        amplitude *= 0.5;
+    }
+    return sum;
+}
+
+fn rotate(point: vec2f, angle: f32) -> vec2f {
+    let c = cos(angle);
+    let s = sin(angle);
+    return mat2x2f(c, s, -s, c) * point;
+}
+
+fn blackbody(t: f32) -> vec3f {
+    let warm = vec3f(1.0, 0.16, 0.018);
+    let gold = vec3f(1.0, 0.63, 0.16);
+    let white = vec3f(1.0, 0.96, 0.86);
+    return mix(mix(warm, gold, smoothstep(0.0, 0.52, t)), white, smoothstep(0.48, 1.0, t));
+}
+
+fn star_layer(uv: vec2f, scale: f32, threshold: f32, time: f32) -> vec3f {
+    let cell = floor(uv * scale);
+    let local = fract(uv * scale) - 0.5;
+    let seed = hash21(cell);
+    let offset = vec2f(hash21(cell + 17.3), hash21(cell + 41.7)) - 0.5;
+    let d = length(local - offset * 0.72);
+    let size = mix(0.018, 0.11, pow(seed, 12.0));
+    let core = smoothstep(size, 0.0, d) * step(threshold, seed);
+    let flare = max(0.0, 1.0 - abs(local.x - offset.x * 0.72) * 40.0)
+        * max(0.0, 1.0 - abs(local.y - offset.y * 0.72) * 40.0) * core;
+    let temperature = hash21(cell + 93.1);
+    let twinkle = 0.82 + 0.18 * sin(time * (1.0 + temperature * 2.0) + seed * 50.0);
+    return mix(vec3f(1.0, 0.52, 0.28), vec3f(0.58, 0.76, 1.0), temperature)
+        * (core + flare * 0.35) * twinkle;
+}
+
+@fragment fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    var uv = (position.xy * 2.0 - resolution) / resolution.y;
     let response = controls.values[0];
-    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
-    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
-    let radius = controls.values[3] * (1.0 + bass * controls.values[1] * 0.08);
-    let r = length(uv);
-    let angle = atan2(uv.y, uv.x) + scene.values[2] + uniforms.time * controls.values[10];
-    let lens = controls.values[4] * radius / max(r, 0.025);
-    let warped_angle = angle + lens * 0.32;
-    let disk_y = uv.y + sin(warped_angle * 2.0 + uniforms.time * controls.values[6]) * controls.values[5] * 0.25;
-    let disk = exp(-abs(disk_y) / max(controls.values[5], 0.01))
-        * smoothstep(radius * 0.7, radius * 1.2, r) * exp(-r * 0.8);
-    let doppler = 0.5 + 0.5 * cos(warped_angle);
-    let band = min(u32(fract(warped_angle / 6.28318 + 1.0) * 64.0), 63u);
-    let energy = features.spectrum[band] * response;
-    let photon_ring = 0.009 / max(abs(r - radius * (1.0 + lens * 0.08)), 0.005);
-    let shadow = 1.0 - smoothstep(radius * 0.78, radius, r);
-    let jet = exp(-abs(uv.x) * 30.0) * smoothstep(radius, radius * 1.8, abs(uv.y))
-        * controls.values[8] * (0.15 + high * controls.values[2] + extras.onset);
-    let star_uv = floor((uv + normalize(uv + vec2f(0.001)) * lens * 0.08) * 75.0);
-    let stars = step(0.995 - controls.values[9] * 0.014, hash21(star_uv));
-    var color = routed(88u) * 0.35 + routed(84u) * stars * (0.2 + high * 0.4);
-    color += mix(routed(72u), routed(80u), doppler) * disk * controls.values[7] * (0.12 + energy * 0.45);
-    color += routed(84u) * photon_ring * (0.04 + bass * 0.08);
-    color += mix(routed(76u), routed(80u), 0.5) * jet * 0.4;
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.8);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.8);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.8);
+    let rms = clamp(uniforms.audio.w * response, 0.0, 1.8);
+    let time = uniforms.time;
+
+    let camera_drift = controls.values[19] * vec2f(sin(time * 0.071), cos(time * 0.053)) * 0.055;
+    uv -= camera_drift;
+    uv = rotate(uv, scene.values[2] + time * controls.values[18] * 0.025);
+    uv /= max(scene.values[4], 0.35);
+
+    let radius = controls.values[4] * (1.0 + bass * controls.values[1] * 0.055);
+    let distance_to_center = max(length(uv), 0.002);
+    let lens_amount = controls.values[5] * radius * radius / (distance_to_center + 0.035);
+    let lensed_uv = uv * (1.0 + lens_amount / max(distance_to_center, radius * 0.45));
+
+    var color = vec3f(0.00035, 0.00055, 0.0014);
+
+    let nebula_uv = rotate(lensed_uv * 0.58, -0.22);
+    let nebula_a = fbm(nebula_uv * 2.2 + vec2f(time * 0.004, -time * 0.002));
+    let nebula_b = fbm(nebula_uv * 4.6 - 11.7);
+    let nebula_mask = pow(max(nebula_a * nebula_b - 0.22, 0.0), 1.8) * controls.values[14];
+    color += mix(vec3f(0.012, 0.018, 0.06), vec3f(0.12, 0.025, 0.10), nebula_b)
+        * nebula_mask * (0.45 + mid * 0.18);
+
+    let star_warp = lensed_uv + normalize(lensed_uv + vec2f(0.0001)) * lens_amount * 0.32;
+    let density = controls.values[12];
+    let depth = controls.values[13];
+    color += star_layer(star_warp, 58.0 * depth, 0.987 - density * 0.018, time)
+        * (0.25 + high * controls.values[2] * 0.18);
+    color += star_layer(star_warp + vec2f(8.3, -2.7), 137.0 * depth, 0.994 - density * 0.009, time * 1.3)
+        * (0.45 + high * controls.values[2] * 0.26);
+    color += star_layer(star_warp - vec2f(14.1, 9.4), 311.0 * depth, 0.997 - density * 0.004, time * 1.8)
+        * (0.52 + high * controls.values[2] * 0.34);
+
+    let inclination = controls.values[17];
+    let disk_uv = vec2f(lensed_uv.x, lensed_uv.y / max(inclination, 0.04));
+    let disk_r = length(disk_uv);
+    let disk_angle = atan2(disk_uv.y, disk_uv.x);
+    let rotation = disk_angle * 5.0 - time * controls.values[8] * (1.0 + 0.25 / max(disk_r, 0.1));
+    let turbulence = fbm(vec2f(disk_r * 24.0 - time * controls.values[8] * 0.9, rotation * 1.35));
+    let fine_dust = fbm(vec2f(disk_r * 63.0 + time * 0.07, rotation * 2.7));
+    let inner = radius * 1.08;
+    let outer = radius * (3.9 + controls.values[7] * 4.0);
+    let radial_mask = smoothstep(inner, inner * 1.32, disk_r)
+        * (1.0 - smoothstep(outer * 0.72, outer, disk_r));
+    let vertical_mask = exp(-abs(lensed_uv.y) / max(controls.values[7] * (0.20 + disk_r * 0.16), 0.006));
+    let clumps = mix(0.12, 1.0, pow(turbulence, 1.4)) * mix(0.55, 1.25, fine_dust);
+    let disk_energy = radial_mask * vertical_mask * clumps * controls.values[10];
+    let approaching = 0.5 + 0.5 * cos(disk_angle);
+    let beam = pow(mix(0.55, 1.7, approaching), controls.values[11]);
+    let temperature = pow(clamp(inner * 2.3 / max(disk_r, inner), 0.0, 1.0), 0.72);
+    let spectrum_index = min(u32(fract(disk_angle / 6.283185 + 1.0) * 64.0), 63u);
+    let spectral_energy = clamp(features.spectrum[spectrum_index] * response, 0.0, 1.8);
+    color += blackbody(temperature) * disk_energy * beam * controls.values[9]
+        * (0.32 + spectral_energy * 0.42 + rms * 0.12);
+
+    let back_disk = step(0.0, lensed_uv.y);
+    let warped_back = exp(-abs(abs(lensed_uv.y) - radius * 0.78) / 0.028)
+        * smoothstep(radius * 0.75, radius * 2.3, abs(lensed_uv.x))
+        * (1.0 - smoothstep(radius * 2.3, radius * 3.7, abs(lensed_uv.x)));
+    color += blackbody(0.72) * warped_back * back_disk * controls.values[9] * 0.24;
+
+    let photon_distance = abs(distance_to_center - radius * (1.015 + controls.values[5] * 0.024));
+    let photon_ring = exp(-photon_distance * 210.0 / max(controls.values[6], 0.08));
+    let ring_asymmetry = mix(0.5, 1.6, 0.5 + 0.5 * uv.x / max(distance_to_center, 0.01));
+    color += blackbody(0.91) * photon_ring * ring_asymmetry * controls.values[6]
+        * (0.46 + bass * 0.20);
+
+    let jet_axis = abs(lensed_uv.x + sin(lensed_uv.y * 18.0 - time * 0.7) * 0.006);
+    let jet_start = smoothstep(radius * 0.8, radius * 1.55, abs(lensed_uv.y));
+    let jet_end = 1.0 - smoothstep(radius * controls.values[16], radius * controls.values[16] * 4.2, abs(lensed_uv.y));
+    let jet_core = exp(-jet_axis * (58.0 + 18.0 / max(abs(lensed_uv.y), 0.08))) * jet_start * jet_end;
+    let jet_shell = exp(-jet_axis * 18.0) * jet_core;
+    let jet_audio = controls.values[15] * (0.12 + high * 0.22 + extras.onset * controls.values[3]);
+    color += mix(vec3f(0.18, 0.42, 1.0), vec3f(0.84, 0.92, 1.0), jet_core)
+        * (jet_core + jet_shell * 0.22) * jet_audio;
+
+    let shadow = 1.0 - smoothstep(radius * 0.91, radius * 1.025, distance_to_center);
     color *= 1.0 - shadow;
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.8 + scene.values[92]));
+    color += vec3f(0.18, 0.26, 0.42) * photon_ring * controls.values[21] * 0.055;
+
+    let vignette_uv = position.xy / resolution;
+    color *= 1.0 - 0.52 * pow(length(vignette_uv - 0.5) * 1.25, 2.1);
+    let grain = hash21(position.xy + vec2f(fract(time) * 991.0, time * 17.0)) - 0.5;
+    color += grain * controls.values[22] * 0.018;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[20]);
+    color = pow(color, vec3f(0.88));
     return vec4f(color, 1.0);
 }
