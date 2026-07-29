@@ -140,12 +140,16 @@ pub struct StudioState {
 
 impl Default for StudioState {
     fn default() -> Self {
+        let mut layers = StudioLayerKind::LIVING_PHOTOGRAPH
+            .into_iter()
+            .map(StudioLayer::living_photograph)
+            .collect::<Vec<_>>();
+        for layer in layers.iter_mut().skip(1) {
+            layer.visible = false;
+        }
         Self {
-            layers: StudioLayerKind::LIVING_PHOTOGRAPH
-                .into_iter()
-                .map(StudioLayer::living_photograph)
-                .collect(),
-            selected: 1,
+            layers,
+            selected: 0,
             image: None,
             notice: None,
         }
@@ -249,6 +253,8 @@ mod tests {
     fn layer_stack_is_bounded_and_reorderable() {
         let mut studio = StudioState::default();
         assert_eq!(studio.layers.len(), 3);
+        assert!(studio.layers[0].visible);
+        assert!(studio.layers[1..].iter().all(|layer| !layer.visible));
         assert!(!studio.add(StudioLayerKind::Image));
         assert!(studio.add(StudioLayerKind::Preset));
         assert_eq!(studio.layers[0].kind, StudioLayerKind::Preset);

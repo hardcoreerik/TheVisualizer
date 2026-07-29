@@ -582,6 +582,51 @@ fn pacing_delay(limit: FrameLimit, elapsed: Duration) -> Option<Duration> {
     limit.interval()?.checked_sub(elapsed)
 }
 
+fn soft_ellipse(point: Pos2, center: Pos2, radius: Vec2) -> f32 {
+    let distance =
+        ((point.x - center.x) / radius.x).powi(2) + ((point.y - center.y) / radius.y).powi(2);
+    (1.0 - distance).clamp(0.0, 1.0).powi(2)
+}
+
+fn living_photo_plant_mask(point: Pos2) -> f32 {
+    soft_ellipse(point, Pos2::new(0.16, 0.56), Vec2::new(0.25, 0.28))
+        .max(soft_ellipse(
+            point,
+            Pos2::new(0.89, 0.54),
+            Vec2::new(0.24, 0.3),
+        ))
+        .max(soft_ellipse(
+            point,
+            Pos2::new(0.53, 0.43),
+            Vec2::new(0.2, 0.18),
+        ))
+}
+
+fn living_photo_glass_mask(point: Pos2) -> f32 {
+    soft_ellipse(point, Pos2::new(0.69, 0.27), Vec2::new(0.3, 0.29)).max(soft_ellipse(
+        point,
+        Pos2::new(0.35, 0.27),
+        Vec2::new(0.1, 0.28),
+    ))
+}
+
+fn studio_image_position(rect: Rect, uv: Rect, source: Pos2) -> Pos2 {
+    rect.min
+        + Vec2::new(
+            (source.x - uv.min.x) / uv.width(),
+            (source.y - uv.min.y) / uv.height(),
+        ) * rect.size()
+}
+
+fn hash01(value: f32) -> f32 {
+    (value.sin() * 43_758.547).fract().abs()
+}
+
+fn rare_bird_progress(time: f32) -> Option<f32> {
+    let phase = (time - 37.0).rem_euclid(53.0);
+    (phase < 2.4).then_some(phase / 2.4)
+}
+
 fn visual_index_for_key(key: egui::Key) -> Option<usize> {
     match key {
         egui::Key::Num1 => Some(0),
@@ -1986,17 +2031,150 @@ impl VisualizerApp {
             ),
             Vec2::new(uv_width, uv_height),
         );
-        let light = (0.82 + energy * layer.reactivity * 0.18).clamp(0.0, 1.0);
-        painter.image(
-            image.texture.id(),
-            rect,
-            uv,
-            Color32::from_rgba_unmultiplied(
-                (255.0 * light) as u8,
-                (255.0 * light) as u8,
-                (255.0 * light) as u8,
-                (255.0 * layer.opacity.clamp(0.0, 1.0)) as u8,
-            ),
+        let time = self.started.elapsed().as_secs_f32();
+        let motion = layer.reactivity;
+        let mut mesh = egui::Mesh::with_texture(image.texture.id());
+        const COLUMNS: u32 = 24;
+        const ROWS: u32 = 14;
+        for row in 0..=ROWS {
+            for column in 0..=COLUMNS {
+                let point = Vec2::new(column as f32 / COLUMNS as f32, row as f32 / ROWS as f32);
+                let mut source = uv.min + point * uv.size();
+                let plants = living_photo_plant_mask(source);
+                let table = soft_ellipse(source, Pos2::new(0.54, 0.57), Vec2::new(0.19, 0.13));
+                let frog = soft_ellipse(source, Pos2::new(0.555, 0.545), Vec2::new(0.055, 0.045));
+                source.x += plants
+                    * self.features.mid
+                    * motion
+                    * 0.0024
+                    * (time * 0.75 + source.y * 11.0).sin();
+                source.y += table * self.features.low * motion * 0.0008 * (time * 3.0).sin();
+                source.y +=
+                    frog * (0.00035 + self.features.rms * motion * 0.0011) * (time * 1.7).sin();
+                let cloud = living_photo_glass_mask(source)
+                    * (time * 0.07 + source.x * 8.0).sin()
+                    * self.features.low
+                    * motion;
+                let light = (0.84 + energy * motion * 0.12 + cloud * 0.035).clamp(0.68, 1.0);
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: rect.min + point * rect.size(),
+                    uv: source,
+                    color: Color32::from_rgba_unmultiplied(
+                        (255.0 * light) as u8,
+                        (255.0 * light) as u8,
+                        (255.0 * light) as u8,
+                        (255.0 * layer.opacity.clamp(0.0, 1.0)) as u8,
+                    ),
+                });
+            }
+        }
+        for row in 0..ROWS {
+            for column in 0..COLUMNS {
+                let top_left = row * (COLUMNS + 1) + column;
+                let bottom_left = top_left + COLUMNS + 1;
+                mesh.indices.extend_from_slice(&[
+                    top_left,
+                    bottom_left,
+                    top_left + 1,
+                    top_left + 1,
+                    bottom_left,
+                    bottom_left + 1,
+                ]);
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        self.draw_living_photo_weather(painter, rect, uv, layer.opacity, time);
+        self.draw_living_photo_wildlife(painter, rect, uv, layer.opacity, time);
+    }
+
+    fn draw_living_photo_weather(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        uv: Rect,
+        opacity: f32,
+        time: f32,
+    ) {
+        let rain = (0.15 + self.features.high * 0.85) * opacity;
+        for index in 0..36 {
+            let seed = hash01(index as f32 * 17.31);
+            let source = Pos2::new(
+                0.27 + hash01(index as f32 * 8.13) * 0.67,
+                0.05 + (seed + time * (0.012 + self.features.high * 0.026)).fract() * 0.55,
+            );
+            if living_photo_glass_mask(source) < 0.35 {
+                continue;
+            }
+            let start = studio_image_position(rect, uv, source);
+            let end =
+                studio_image_position(rect, uv, source + Vec2::new(-0.002, 0.025 + seed * 0.035));
+            painter.line_segment(
+                [start, end],
+                Stroke::new(
+                    0.45 + seed * 0.65,
+                    Color32::from_rgba_unmultiplied(195, 215, 212, (rain * 58.0) as u8),
+                ),
+            );
+        }
+    }
+
+    fn draw_living_photo_wildlife(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        uv: Rect,
+        opacity: f32,
+        time: f32,
+    ) {
+        let insect_alpha = opacity * (0.22 + self.features.high * 0.55);
+        for index in 0..7 {
+            let seed = hash01(index as f32 * 29.7);
+            let center = Pos2::new(
+                0.34 + seed * 0.43,
+                0.35 + hash01(index as f32 * 11.2) * 0.28,
+            );
+            let source = center
+                + Vec2::new(
+                    (time * (0.45 + seed * 0.5) + seed * 9.0).sin() * 0.012,
+                    (time * (0.62 + seed * 0.4) + seed * 13.0).cos() * 0.008,
+                ) * (0.35 + self.features.high);
+            let point = studio_image_position(rect, uv, source);
+            if rect.contains(point) {
+                painter.circle_filled(
+                    point,
+                    0.7 + self.features.high * 0.8,
+                    Color32::from_rgba_unmultiplied(35, 31, 18, (insect_alpha * 150.0) as u8),
+                );
+            }
+        }
+
+        let Some(progress) = rare_bird_progress(time) else {
+            return;
+        };
+        let source = Pos2::new(
+            0.61 + progress * 0.22,
+            0.24 - (progress * std::f32::consts::PI).sin() * 0.025,
+        );
+        let point = studio_image_position(rect, uv, source);
+        if !rect.contains(point) {
+            return;
+        }
+        let size = rect.width() * 0.0065;
+        let flap = (time * (8.0 + self.features.high * 12.0)).sin() * size;
+        let color = Color32::from_rgba_unmultiplied(
+            35,
+            42,
+            37,
+            (opacity * (42.0 + self.features.transient * 38.0)) as u8,
+        );
+        painter.circle_filled(point, size * 0.45, color);
+        painter.line_segment(
+            [point, point + Vec2::new(-size, -flap.abs())],
+            Stroke::new(size * 0.35, color),
+        );
+        painter.line_segment(
+            [point, point + Vec2::new(size, -flap.abs())],
+            Stroke::new(size * 0.35, color),
         );
     }
 
@@ -2769,6 +2947,13 @@ impl VisualizerApp {
                 ))
                 .small()
                 .color(Color32::from_rgb(145, 170, 190)),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Living Photo · mids move foliage · bass shifts structure · treble drives rain and insects · rare bird",
+                )
+                .small()
+                .color(Color32::from_rgb(125, 165, 150)),
             );
         }
         ui.label(
@@ -3922,9 +4107,11 @@ mod tests {
     use super::{
         ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
-        VisualHistory, callback_is_new, default_needs_recovery, lerp_color, pacing_delay,
-        status_hint, visual_index_for_key,
+        VisualHistory, callback_is_new, default_needs_recovery, lerp_color,
+        living_photo_plant_mask, pacing_delay, rare_bird_progress, status_hint,
+        visual_index_for_key,
     };
+    use eframe::egui::Pos2;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -4064,6 +4251,16 @@ mod tests {
         assert_eq!(stats.count, 1);
         assert_eq!(stats.last, Some(started));
         assert_eq!(stats.per_minute(started + Duration::from_secs(60)), 1.0);
+    }
+
+    #[test]
+    fn living_photo_masks_and_rare_bird_stay_bounded() {
+        assert!(living_photo_plant_mask(Pos2::new(0.16, 0.56)) > 0.9);
+        assert_eq!(living_photo_plant_mask(Pos2::new(0.5, 0.9)), 0.0);
+        assert_eq!(rare_bird_progress(10.0), None);
+        assert_eq!(rare_bird_progress(37.0), Some(0.0));
+        assert!(rare_bird_progress(38.2).is_some());
+        assert_eq!(rare_bird_progress(40.0), None);
     }
 
     #[test]
