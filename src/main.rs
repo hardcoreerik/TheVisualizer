@@ -4943,6 +4943,7 @@ impl VisualizerApp {
                     "Energy",
                     "Organic",
                     "Architecture",
+                    "Sampled · Visual Fields",
                     "Imported · ISF",
                     "Studio",
                 ] {
@@ -6385,6 +6386,16 @@ fn status_hint(status: &str, source: Option<SourceKind>) -> Option<&'static str>
 fn preset_category(id: &str) -> &'static str {
     match id {
         id if id.starts_with("isf.") => "Imported · ISF",
+        "thevisualizer.pulse-trace"
+        | "thevisualizer.spectrum-skyline"
+        | "thevisualizer.radial-burst"
+        | "thevisualizer.spectrogram-city"
+        | "thevisualizer.spectral-terrain"
+        | "thevisualizer.wave-tunnel"
+        | "thevisualizer.particle-ocean"
+        | "thevisualizer.wireframe-terrain"
+        | "thevisualizer.halo-spectrum"
+        | "thevisualizer.atomic-orbits" => "Sampled · Visual Fields",
         "thevisualizer.cascading-falls" => "Spectrum",
         "thevisualizer.neon-horizon"
         | "thevisualizer.feedback-tunnel"
@@ -6567,6 +6578,66 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
             gesture: "Canvas · drag changes the aisle perspective · wheel changes cathedral depth · zones illuminate local panes",
             accent: [120, 150, 255],
         },
+        "thevisualizer.pulse-trace" => InstrumentProfile {
+            family: "Layered Signal",
+            tagline: "Stacked waveform echoes drift into luminous green signal calligraphy.",
+            gesture: "Instrument · shape amplitude, echo layers, drift, scan, grid, afterglow, and exposure",
+            accent: [45, 255, 145],
+        },
+        "thevisualizer.spectrum-skyline" => InstrumentProfile {
+            family: "Spectrum Metropolis",
+            tagline: "Frequency towers, animated windows, traffic, haze, and reflections build a neon city.",
+            gesture: "Instrument · shape tower count, height, windows, reflections, haze, traffic, and edge glow",
+            accent: [30, 225, 255],
+        },
+        "thevisualizer.radial-burst" => InstrumentProfile {
+            family: "Radial Spectrum",
+            tagline: "A dark reactive core launches individually frequency-driven rays through a spectral corona.",
+            gesture: "Instrument · shape core radius, spoke count, ray length, rotation, wobble, and bloom",
+            accent: [175, 80, 255],
+        },
+        "thevisualizer.spectrogram-city" => InstrumentProfile {
+            family: "Thermal History City",
+            tagline: "Scrolling spectrum history rises into a false-color city of frequency relief.",
+            gesture: "Instrument · shape history depth, relief, block density, perspective, contours, and fog",
+            accent: [255, 85, 35],
+        },
+        "thevisualizer.spectral-terrain" => InstrumentProfile {
+            family: "Spectrum Surface",
+            tagline: "Audio history becomes a deep luminous landscape with flying contours and elevation color.",
+            gesture: "Instrument · shape peak height, terrain rows, grid columns, flight, wireframe, and distance fog",
+            accent: [70, 190, 255],
+        },
+        "thevisualizer.wave-tunnel" => InstrumentProfile {
+            family: "Waveform Tunnel",
+            tagline: "The live waveform warps a glowing ember tunnel accelerating around the listener.",
+            gesture: "Instrument · shape ring density, ribs, wave warp, flight, roll, aperture, and tube glow",
+            accent: [255, 105, 35],
+        },
+        "thevisualizer.particle-ocean" => InstrumentProfile {
+            family: "Particle Current",
+            tagline: "A perspective ocean of points, links, and sparks flows across the spectrum.",
+            gesture: "Instrument · shape particle density, wave height, current, depth, drift, links, and sparkle",
+            accent: [90, 95, 255],
+        },
+        "thevisualizer.wireframe-terrain" => InstrumentProfile {
+            family: "Wireframe Landscape",
+            tagline: "Spectrum history deforms a cyan-green perspective grid into a flying digital mountain range.",
+            gesture: "Instrument · shape grid rows, columns, elevation, perspective, flight, width, and horizon glow",
+            accent: [40, 255, 190],
+        },
+        "thevisualizer.halo-spectrum" => InstrumentProfile {
+            family: "Chromatic Halo",
+            tagline: "A circular spectrum, central waveform, and reflected light form one radiant audio emblem.",
+            gesture: "Instrument · shape halo radius, bars, length, waveform, rotation, reflection, and bloom",
+            accent: [255, 70, 210],
+        },
+        "thevisualizer.atomic-orbits" => InstrumentProfile {
+            family: "Atomic Light Field",
+            tagline: "Audio-driven elliptical light trails and electrons precess around a transient nucleus.",
+            gesture: "Instrument · shape orbit count, size, eccentricity, spin, precession, electrons, and trails",
+            accent: [110, 195, 255],
+        },
         "thevisualizer.cityscape" => InstrumentProfile {
             family: "Living City",
             tagline: "A complete procedural metropolis routes bands into buildings, crowds, traffic, sky worlds, and physics.",
@@ -6711,7 +6782,7 @@ mod tests {
             "host.performance-studio".to_owned(),
         ];
         ids.extend(bundled.presets.into_iter().map(|preset| preset.id));
-        assert_eq!(ids.len(), 28);
+        assert_eq!(ids.len(), 38);
 
         let mut taglines = std::collections::HashSet::new();
         for id in ids {

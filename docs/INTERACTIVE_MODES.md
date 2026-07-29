@@ -15,7 +15,7 @@ TheVisualizer now treats each visual as an interactive instrument. The host owns
 
 A Zone Studio layer contains normalized position, radius, strength, audio band (`Full`, `Low`, `Mid`, or `High`), pin state, visual type, rotation, speed, density, thickness, trail level, and color shift. Its GPU effect remains visible when handles or text are hidden. Pinning protects the zone from deletion; deliberate dragging remains available. On-canvas handles use compact diamond anchors and four sparse range ticks instead of enclosing radius circles.
 
-The ten original procedural types are Pulse Trace, Spectrum Skyline, Radial Burst, Spectrogram City, Spectral Terrain, Wave Tunnel, Particle Ocean, Wireframe Terrain, Halo Spectrum, and Atomic Orbits. They share one bounded GPU overlay pass above every base visual and may be mixed independently.
+The ten original procedural types are Pulse Trace, Spectrum Skyline, Radial Burst, Spectrogram City, Spectral Terrain, Wave Tunnel, Particle Ocean, Wireframe Terrain, Halo Spectrum, and Atomic Orbits. They share one bounded GPU overlay pass above every base visual and may be mixed independently. Each concept also exists as a complete full-screen mode in the `Sampled · Visual Fields` family.
 
 ## Instrument controls
 
@@ -47,6 +47,23 @@ The implemented palettes are Cyber Neon, Earth Tones, Arctic Glass, Inferno, Aci
 | TheVisualCityScape | WGSL | rotatable party block with an impossible sky | 35 |
 
 All ten modes also receive the shared zone, camera, palette, material, glow, gloss, and saturation controls. The two host visuals are not `.tvpreset` packages, so the panel intentionally gives them only the response control instead of irrelevant preset options.
+
+## Sampled visual fields
+
+The ten images in `Sample Images` are design references for ten independent GPU modes; they are not bundled runtime textures. Each mode has its own metadata-defined Instrument controls:
+
+| Mode | Full-screen identity | Primary controls |
+| --- | --- | --- |
+| Pulse Trace | stacked luminous waveform echoes | amplitude, layers, drift, scan, grid, afterglow |
+| Spectrum Skyline | frequency metropolis with windows and reflections | buildings, height, windows, reflection, haze, traffic |
+| Radial Burst | spectral rays around a dark reactive core | radius, spokes, length, rotation, wobble, bloom |
+| Spectrogram City | false-color history rising into city relief | history, relief, density, perspective, contours, fog |
+| Spectral Terrain | deep history surface with luminous elevation | height, rows, columns, flight, wireframe, fog |
+| Wave Tunnel | waveform-warped ember tunnel | rings, ribs, warp, flight, roll, aperture |
+| Particle Ocean | perspective current of audio-driven points | density, wave height, flow, depth, links, sparkle |
+| Wireframe Terrain | cyan-green history-deformed grid | rows, columns, elevation, perspective, flight, horizon |
+| Halo Spectrum | circular spectrum with waveform and reflection | radius, bars, length, waveform, reflection, bloom |
+| Atomic Orbits | precessing elliptical trails and electrons | orbits, size, eccentricity, spin, electrons, trails |
 
 ## TheVisualCityScape
 

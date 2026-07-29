@@ -327,7 +327,7 @@ mod tests {
 
         let bundled = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/presets")));
         assert!(bundled.errors.is_empty(), "{:?}", bundled.errors);
-        assert_eq!(bundled.presets.len(), 25);
+        assert_eq!(bundled.presets.len(), 35);
         let city = bundled
             .presets
             .iter()
@@ -346,6 +346,28 @@ mod tests {
                 .filter(|preset| preset.id.starts_with("isf."))
                 .count(),
             8
+        );
+        assert_eq!(
+            bundled
+                .presets
+                .iter()
+                .filter(|preset| {
+                    matches!(
+                        preset.id.as_str(),
+                        "thevisualizer.pulse-trace"
+                            | "thevisualizer.spectrum-skyline"
+                            | "thevisualizer.radial-burst"
+                            | "thevisualizer.spectrogram-city"
+                            | "thevisualizer.spectral-terrain"
+                            | "thevisualizer.wave-tunnel"
+                            | "thevisualizer.particle-ocean"
+                            | "thevisualizer.wireframe-terrain"
+                            | "thevisualizer.halo-spectrum"
+                            | "thevisualizer.atomic-orbits"
+                    )
+                })
+                .count(),
+            10
         );
     }
 

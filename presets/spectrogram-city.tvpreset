@@ -1,0 +1,63 @@
+//! format: 2
+//! id: thevisualizer.spectrogram-city
+//! name: Spectrogram City
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: History|depth|History Depth|0.2|1.0|1.0
+//! parameter: City|relief|City Relief|0.1|1.5|0.7
+//! parameter: City|density|Block Density|8.0|48.0|30.0
+//! parameter: Camera|perspective|Perspective|0.0|1.5|0.72
+//! parameter: Motion|scroll|History Scroll|-2.0|2.0|0.0
+//! parameter: Surface|contours|Heat Contours|0.0|2.0|0.9
+//! parameter: Color|phase|Thermal Phase|-1.0|1.0|0.0
+//! parameter: Surface|fog|Depth Fog|0.0|2.0|0.75
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.1
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32, history_rows: f32, history_bands: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+struct SpectrumHistory { values: array<f32, 8192> }
+@group(0) @binding(5) var<storage, read> history: SpectrumHistory;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn heat(v: f32, phase: f32) -> vec3f {
+    let x = clamp(v + phase * 0.12, 0.0, 1.0);
+    return mix(mix(routed(88u), routed(76u), smoothstep(0.0, 0.45, x)), mix(routed(80u), routed(84u), smoothstep(0.5, 1.0, x)), smoothstep(0.3, 0.8, x));
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = p.xy / res;
+    let depth = clamp((uv.y - 0.08) / 0.9, 0.0, 0.999);
+    let perspective = controls.values[4];
+    let spread = mix(0.42, 1.0, depth);
+    let sx = clamp((uv.x - 0.5) / spread + 0.5, 0.0, 0.999);
+    let scroll = fract(depth * controls.values[1] + uniforms.time * controls.values[5] * 0.015);
+    let rows = max(u32(extras.history_rows), 1u);
+    let row = min(u32(scroll * f32(rows)), rows - 1u);
+    let band = min(u32(sx * 64.0), 63u);
+    let energy = clamp(history.values[row * 64u + band] * uniforms.gain * controls.values[0], 0.0, 1.4);
+    let blocks = step(0.12, fract(sx * controls.values[3])) * step(fract(sx * controls.values[3]), 0.88);
+    let ground_y = 0.94 - depth * 0.68 * perspective;
+    let relief = energy * controls.values[2] * (0.05 + depth * 0.13);
+    let tower = blocks * step(ground_y - relief, uv.y) * step(uv.y, ground_y);
+    let contours = pow(max(0.0, sin(energy * 32.0 - depth * 22.0)), 12.0) * controls.values[6];
+    let grid = pow(max(0.0, sin(depth * 85.0)), 24.0) * 0.25;
+    let fog = depth * controls.values[8];
+    var color = heat(energy, controls.values[7]) * (tower * (0.45 + energy) + contours * 0.22 + grid);
+    color += routed(72u) * tower * extras.transient * 0.25;
+    color = mix(color, routed(88u) * 0.18, clamp(fog * 0.35, 0.0, 0.8));
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}
