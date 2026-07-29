@@ -2,3 +2,7 @@ TheVisualizer
 Copyright 2026 TheVisualizer contributors
 
 This product includes software developed by TheVisualizer contributors.
+
+The bundled `ISF ·` presets are modified WGSL/audio-reactive adaptations of
+MIT-licensed shaders from VIDVOX ISF-Files. See docs/ISF_IMPORTS.md and
+third-party/isf-files/LICENSE for source, revision, credit, and license details.

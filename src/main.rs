@@ -4489,6 +4489,7 @@ impl VisualizerApp {
                     "Energy",
                     "Organic",
                     "Architecture",
+                    "Imported · ISF",
                     "Studio",
                 ] {
                     let filtered = entries
@@ -5830,6 +5831,7 @@ fn status_hint(status: &str, source: Option<SourceKind>) -> Option<&'static str>
 
 fn preset_category(id: &str) -> &'static str {
     match id {
+        id if id.starts_with("isf.") => "Imported · ISF",
         "thevisualizer.cascading-falls" => "Spectrum",
         "thevisualizer.neon-horizon"
         | "thevisualizer.feedback-tunnel"
@@ -5850,6 +5852,54 @@ fn preset_category(id: &str) -> &'static str {
 
 fn instrument_profile(id: &str) -> InstrumentProfile {
     match id {
+        "isf.vidvox.color-bars" => InstrumentProfile {
+            family: "ISF Broadcast",
+            tagline: "Broadcast bars bend, scan, and glitch into a playable audio signal reactor.",
+            gesture: "Canvas · drag rolls the signal · wheel changes bar scale · zones interrupt local color channels",
+            accent: [255, 210, 70],
+        },
+        "isf.vidvox.color-schemes" => InstrumentProfile {
+            family: "ISF Harmony",
+            tagline: "Chromatic harmonies unfold across linear and radial maps with musical edge light.",
+            gesture: "Canvas · drag turns the atlas · wheel changes palette density · zones retune local harmonies",
+            accent: [255, 110, 190],
+        },
+        "isf.vidvox.heart" => InstrumentProfile {
+            family: "ISF Heart Field",
+            tagline: "Orbiting luminous hearts pulse, echo, and sparkle directly from the beat.",
+            gesture: "Canvas · drag turns the orbit · wheel changes heart scale · zones seed local pulses",
+            accent: [255, 55, 105],
+        },
+        "isf.carter-rosenberg.linear-gradient" => InstrumentProfile {
+            family: "ISF Gradient",
+            tagline: "A fluid gradient engine folds color bands through bass width, mid phase, and treble shimmer.",
+            gesture: "Canvas · drag aims the gradient · wheel changes frequency · zones bend local color flow",
+            accent: [255, 145, 45],
+        },
+        "isf.vidvox.noise" => InstrumentProfile {
+            family: "ISF Signal Noise",
+            tagline: "Temporal RGB static becomes a rhythmic broadcast surface with persistence and scanlines.",
+            gesture: "Canvas · drag scrubs the signal · wheel changes cell scale · zones inject local static",
+            accent: [125, 210, 255],
+        },
+        "isf.vidvox.ridgelines" => InstrumentProfile {
+            family: "ISF Terrain",
+            tagline: "Multifractal ridges rise into contour-lit terrain with snow, depth fog, and audio weather.",
+            gesture: "Canvas · drag crosses the terrain · wheel changes geological scale · zones raise local peaks",
+            accent: [105, 205, 255],
+        },
+        "isf.vidvox.simplex-noise" => InstrumentProfile {
+            family: "ISF Fractal Field",
+            tagline: "Layered procedural turbulence folds, flows, and grains across an audio-painted palette.",
+            gesture: "Canvas · drag advects the field · wheel changes fractal scale · zones fold local turbulence",
+            accent: [120, 95, 255],
+        },
+        "isf.vidvox.worley-cells" => InstrumentProfile {
+            family: "ISF Cellular",
+            tagline: "Living Voronoi cells drift through three distance geometries with reactive luminous borders.",
+            gesture: "Canvas · drag moves the colony · wheel changes cell density · zones energize local membranes",
+            accent: [80, 235, 190],
+        },
         "host.neon-scope" => InstrumentProfile {
             family: "Waveform",
             tagline: "Layered oscilloscope trails turn amplitude and timing into luminous calligraphy.",
@@ -6077,7 +6127,7 @@ mod tests {
             "host.performance-studio".to_owned(),
         ];
         ids.extend(bundled.presets.into_iter().map(|preset| preset.id));
-        assert_eq!(ids.len(), 20);
+        assert_eq!(ids.len(), 28);
 
         let mut taglines = std::collections::HashSet::new();
         for id in ids {

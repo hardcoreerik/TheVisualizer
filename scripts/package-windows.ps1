@@ -70,6 +70,10 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\include\thevisualizer_pl
 Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stagePath
 Copy-Item -LiteralPath (Join-Path $repoRoot "NOTICE") -Destination $stagePath
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\LICENSING.md") -Destination $docsPath
+Copy-Item -LiteralPath (Join-Path $repoRoot "docs\ISF_IMPORTS.md") -Destination $docsPath
+New-Item -ItemType Directory -Path (Join-Path $stagePath "third-party\isf-files") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "third-party\isf-files\LICENSE") `
+    -Destination (Join-Path $stagePath "third-party\isf-files")
 & (Join-Path $repoRoot "scripts\collect-third-party-licenses.ps1") `
     -Target "x86_64-pc-windows-msvc" `
     -Destination (Join-Path $stagePath "third-party")
@@ -85,7 +89,7 @@ Set-Content -LiteralPath (Join-Path $pluginPath "example.tvplugin") -Value $plug
 TheVisualizer $($package.version) - Windows x86_64 local test
 
 Run thevisualizer.exe. The player starts on the default Windows system-output loopback source.
-Use S/M for automatic system/microphone input, L for the 20-mode Visual Library, H for labels,
+Use S/M for automatic system/microphone input, L for the 28-mode Visual Library, H for labels,
 up/down for GPU presets, I/O/F/P for instrument panels, B for borderless, F11 for fullscreen,
 Tab for the overlay, and Escape to return or exit. Canvas clicks and drags directly edit the
 active visual; right-click never opens a duplicate context menu.
@@ -119,6 +123,8 @@ $required = @(
     "LICENSE",
     "NOTICE",
     "docs\LICENSING.md",
+    "docs\ISF_IMPORTS.md",
+    "third-party\isf-files\LICENSE",
     "third-party\THIRD-PARTY-LICENSES.txt",
     "README.txt",
     "LOCAL-TEST-NOTICE.txt"

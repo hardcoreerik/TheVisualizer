@@ -327,7 +327,7 @@ mod tests {
 
         let bundled = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/presets")));
         assert!(bundled.errors.is_empty(), "{:?}", bundled.errors);
-        assert_eq!(bundled.presets.len(), 17);
+        assert_eq!(bundled.presets.len(), 25);
         let city = bundled
             .presets
             .iter()
@@ -339,6 +339,14 @@ mod tests {
             assert_eq!(preset.format, 2);
             assert!((10..=40).contains(&preset.parameters.len()));
         }
+        assert_eq!(
+            bundled
+                .presets
+                .iter()
+                .filter(|preset| preset.id.starts_with("isf."))
+                .count(),
+            8
+        );
     }
 
     #[test]

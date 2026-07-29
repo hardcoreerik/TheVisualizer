@@ -1,0 +1,70 @@
+//! format: 2
+//! id: isf.vidvox.heart
+//! name: ISF · Pulse Hearts
+//! version: 0.1.0
+//! author: VIDVOX; TheVisualizer WGSL and audio adaptation
+//! license: MIT
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Heart|size|Heart Size|0.05|0.8|0.28
+//! parameter: Heart|count|Heart Count|1.0|12.0|5.0
+//! parameter: Heart|orbit|Orbit|-3.0|3.0|0.25
+//! parameter: Heart|echoes|Echoes|0.0|5.0|2.0
+//! parameter: Audio|bass-beat|Bass Beat|0.0|3.0|1.4
+//! parameter: Audio|mid-orbit|Mid Orbit|0.0|3.0|0.8
+//! parameter: Audio|treble-spark|Treble Spark|0.0|3.0|1.1
+//! parameter: Color|hue|Hue|0.0|1.0|0.96
+//! parameter: Color|rainbow|Rainbow|0.0|1.0|0.25
+//! parameter: Lens|glow|Glow|0.0|4.0|1.5
+//! parameter: Lens|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = fract(vec3f(h) + vec3f(0.0, 0.666667, 0.333333)) * 6.0;
+    return v * mix(vec3f(1.0), clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn heart(p: vec2f) -> f32 {
+    let q = vec2f(p.x, p.y + 0.18);
+    let a = q.x * q.x + q.y * q.y - 0.31;
+    return a * a * a - q.x * q.x * q.y * q.y * q.y;
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let count = u32(clamp(controls.values[2], 1.0, 12.0));
+    var color = vec3f(0.001, 0.0002, 0.002);
+    for (var i = 0u; i < 12u; i++) {
+        if (i >= count) { break; }
+        let fi = f32(i);
+        let angle = fi * 6.283185 / f32(count) + uniforms.time * controls.values[3] * 0.18
+            + mid * controls.values[6] * 0.12;
+        let center = vec2f(cos(angle), sin(angle)) * mix(0.0, 0.55, step(1.5, f32(count)));
+        let beat = 1.0 + bass * controls.values[5] * 0.13 + extras.onset * 0.08;
+        let q = (uv - center) / (controls.values[1] * beat);
+        let d = heart(q);
+        let fill = 1.0 - smoothstep(-0.025, 0.025, d);
+        let glow = exp(-abs(d) * 9.0) * controls.values[10];
+        let hue = fract(controls.values[8] + controls.values[9] * fi / max(f32(count), 1.0));
+        color += hsv(hue, 0.78, 1.0) * (fill * 0.6 + glow * (0.08 + high * controls.values[7] * 0.05));
+        color += hsv(fract(hue + 0.12), 0.65, 1.0) * exp(-abs(d + 0.16) * 15.0)
+            * controls.values[4] * 0.045;
+    }
+    color = 1.0 - exp(-color * controls.values[11]);
+    return vec4f(color, 1.0);
+}

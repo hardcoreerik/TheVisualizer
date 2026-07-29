@@ -8,7 +8,7 @@ The first release target is Windows desktop. The intended experience is simple: 
 
 ## Project status
 
-TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, twenty distinct audio-reactive visualizations, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Seventeen modes are GPU-native WGSL presets with grouped controls, including the persistent-spectrum Cascading Falls and eight new cyber, cosmic, architectural, energy, and organic scenes. Neon Scope, Particle Forge, and the layered Studio complete the twenty-mode library. A portable local-test Windows package containing Studio has passed a same-host fresh-extraction smoke, while the expanded package and clean-machine validation remain open. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
+TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, twenty-eight distinct audio-reactive visualizations, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Twenty-five modes are GPU-native WGSL presets with grouped controls, including the persistent-spectrum Cascading Falls, a rebuilt procedural Event Horizon, and eight provenance-pinned MIT ISF adaptations. Neon Scope, Particle Forge, and the layered Studio complete the twenty-eight-mode library. A portable local-test Windows package containing Studio has passed a same-host fresh-extraction smoke, while the expanded package and clean-machine validation remain open. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
 
 ## Current prototype
 
@@ -18,7 +18,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Waveform, spectrum, energy, and frequency-band analysis
 - Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
 - Automatic default-output recovery timing from detection through stream open and first capture packet
-- Twenty bundled visuals: Neon Scope, Particle Forge, Studio, and seventeen WGSL presets, including Bass Monoliths, Data Storm, Event Horizon, Fractal Reef, Liquid Chrome, Plasma Loom, Quantum Lattice, and Spectral Cathedral
+- Twenty-eight bundled visuals: Neon Scope, Particle Forge, Studio, seventeen original WGSL presets, and eight licensed ISF adaptations grouped under `Imported · ISF`
 - Up to eight shared sound zones plus sixteen Particle Forge 3D force nodes with independent band routing, Emit/Attract/Repel/Spin/Vortex behavior, radius, strength, falloff, axis, depth, and pin state
 - A mode-aware `Instrument [I]` panel with a unique identity, accent, interaction guide, and inline control families for every visual; `Mode [O]` detaches the same active controls, `Forge [F]` inspects the selected 3D force node, and `Performance [P]` owns GPU A/B mixing
 - A searchable, categorized `Visual Library [L]` with session favorites; `H` independently hides visual labels
@@ -89,4 +89,4 @@ Performance Studio can receive MIDI CC/note mappings and localhost OSC messages 
 
 ## License
 
-TheVisualizer's original code, documentation, bundled WGSL presets, plugin SDK, and example plugin are licensed under the [Apache License 2.0](LICENSE). No MilkDrop/projectM code or community presets are included. Future compatibility assets require explicit, artifact-level provenance; see [Licensing](docs/LICENSING.md).
+TheVisualizer's original code, documentation, original WGSL presets, plugin SDK, and example plugin are licensed under the [Apache License 2.0](LICENSE). Eight modified ISF adaptations are MIT-licensed with pinned artifact-level provenance; see [ISF Imports](docs/ISF_IMPORTS.md). No MilkDrop/projectM code or unlabeled community presets are included. Future compatibility assets require explicit provenance; see [Licensing](docs/LICENSING.md).

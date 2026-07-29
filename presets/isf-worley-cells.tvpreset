@@ -1,0 +1,81 @@
+//! format: 2
+//! id: isf.vidvox.worley-cells
+//! name: ISF · Worley Cells
+//! version: 0.1.0
+//! author: VIDVOX; TheVisualizer WGSL and audio adaptation
+//! license: MIT
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Cells|density|Density|2.0|40.0|10.0
+//! parameter: Cells|jitter|Jitter|0.0|1.0|1.0
+//! parameter: Cells|speed|Speed|-2.0|2.0|0.15
+//! parameter: Cells|metric|Distance Metric|0.0|2.0|0.0
+//! parameter: Cells|border-width|Border Width|0.0|0.5|0.08
+//! parameter: Audio|bass-push|Bass Push|0.0|3.0|1.1
+//! parameter: Audio|mid-flow|Mid Flow|0.0|3.0|0.9
+//! parameter: Audio|treble-border|Treble Border|0.0|3.0|1.2
+//! parameter: Color|hue-a|Hue A|0.0|1.0|0.58
+//! parameter: Color|hue-b|Hue B|0.0|1.0|0.10
+//! parameter: Color|saturation|Saturation|0.0|1.5|0.86
+//! parameter: Lens|glow|Glow|0.0|3.0|0.8
+//! parameter: Lens|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hash22(p: vec2f) -> vec2f {
+    let x = fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+    let y = fract(sin(dot(p, vec2f(269.5, 183.3))) * 43758.5453);
+    return vec2f(x, y);
+}
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = fract(vec3f(h) + vec3f(0.0, 0.666667, 0.333333)) * 6.0;
+    return v * mix(vec3f(1.0), clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn metric(v: vec2f, mode: f32) -> f32 {
+    if (mode < 0.5) { return length(v); }
+    if (mode < 1.5) { return abs(v.x) + abs(v.y); }
+    return max(abs(v.x), abs(v.y));
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    var uv = p.xy / res.y * controls.values[1] * (1.0 + bass * controls.values[6] * 0.08);
+    uv += vec2f(uniforms.time * controls.values[3], uniforms.time * controls.values[3] * 0.37
+        + mid * controls.values[7] * 0.12);
+    let cell = floor(uv);
+    let local = fract(uv);
+    var nearest = 10.0; var second = 10.0; var owner = vec2f(0.0);
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let neighbor = vec2f(f32(x), f32(y));
+            let random = hash22(cell + neighbor);
+            let point = neighbor + 0.5 + (random - 0.5) * controls.values[2];
+            let d = metric(point - local, controls.values[4]);
+            if (d < nearest) { second = nearest; nearest = d; owner = random; }
+            else if (d < second) { second = d; }
+        }
+    }
+    let border_distance = second - nearest;
+    let border = 1.0 - smoothstep(controls.values[5], controls.values[5] + 0.045, border_distance);
+    var color = mix(hsv(controls.values[9], controls.values[11], 0.25),
+                    hsv(controls.values[10], controls.values[11], 0.95), owner.x);
+    color *= 0.45 + 0.55 * smoothstep(0.0, 0.72, nearest);
+    color += hsv(fract(owner.y + controls.values[9]), 0.65, 1.0) * border
+        * controls.values[12] * (0.13 + high * controls.values[8] * 0.14 + extras.onset * 0.08);
+    color = 1.0 - exp(-color * controls.values[13]);
+    return vec4f(color, 1.0);
+}
