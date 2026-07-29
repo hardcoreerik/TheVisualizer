@@ -2059,6 +2059,15 @@ impl VisualizerApp {
                     (255.0 * layer.opacity.clamp(0.0, 1.0) * motion.mix) as u8,
                 ),
             );
+            if image.rigged {
+                self.draw_rigged_foliage(
+                    painter,
+                    rect,
+                    uv,
+                    motion.rig_texture.id(),
+                    layer.opacity * motion.mix,
+                );
+            }
             return;
         }
         let time = self.started.elapsed().as_secs_f32();
@@ -2115,6 +2124,107 @@ impl VisualizerApp {
         painter.add(egui::Shape::mesh(mesh));
         self.draw_living_photo_weather(painter, rect, uv, layer.opacity, time);
         self.draw_living_photo_wildlife(painter, rect, uv, layer.opacity, time);
+    }
+
+    fn draw_rigged_foliage(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        uv: Rect,
+        texture: egui::TextureId,
+        opacity: f32,
+    ) {
+        let time = self.started.elapsed().as_secs_f32();
+        let gust = self.features.onset * 0.045;
+        let rigs = [
+            (
+                Rect::from_min_max(Pos2::new(0.0, 0.25), Pos2::new(0.44, 1.0)),
+                Pos2::new(0.18, 0.88),
+                (time * 1.25).sin() * (self.features.mid * 0.04 + self.features.low * 0.025)
+                    + (time * 5.8).sin() * self.features.high * 0.008
+                    + gust,
+                false,
+                -0.012,
+            ),
+            (
+                Rect::from_min_max(Pos2::new(0.62, 0.25), Pos2::new(1.0, 1.0)),
+                Pos2::new(0.86, 0.88),
+                (time * 1.1 + 1.7).sin() * (self.features.mid * 0.037 + self.features.low * 0.028)
+                    + (time * 6.2).sin() * self.features.high * 0.009
+                    - gust,
+                false,
+                0.014,
+            ),
+            (
+                Rect::from_min_max(Pos2::new(0.25, 0.02), Pos2::new(0.68, 0.67)),
+                Pos2::new(0.48, 0.08),
+                (time * 1.55 + 0.7).sin() * (self.features.mid * 0.06 + self.features.low * 0.018)
+                    + (time * 7.0).sin() * self.features.high * 0.015
+                    + gust,
+                true,
+                0.006,
+            ),
+        ];
+        for rig in rigs {
+            self.draw_rig_region(painter, rect, uv, texture, rig, opacity * 0.78);
+        }
+    }
+
+    fn draw_rig_region(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        uv: Rect,
+        texture: egui::TextureId,
+        (bounds, pivot, angle, hanging, depth): (Rect, Pos2, f32, bool, f32),
+        opacity: f32,
+    ) {
+        const COLUMNS: u32 = 3;
+        const ROWS: u32 = 5;
+        let pivot_position = studio_image_position(rect, uv, pivot);
+        let mut mesh = egui::Mesh::with_texture(texture);
+        for row in 0..=ROWS {
+            for column in 0..=COLUMNS {
+                let point = Vec2::new(column as f32 / COLUMNS as f32, row as f32 / ROWS as f32);
+                let source = bounds.min + point * bounds.size();
+                let weight = if hanging {
+                    ((source.y - pivot.y) / (bounds.max.y - pivot.y).max(0.01)).clamp(0.0, 1.0)
+                } else {
+                    ((pivot.y - source.y) / (pivot.y - bounds.min.y).max(0.01)).clamp(0.0, 1.0)
+                }
+                .powf(1.35);
+                let base = studio_image_position(rect, uv, source);
+                let delta = base - pivot_position;
+                let bend = angle * weight;
+                let (sin, cos) = bend.sin_cos();
+                let parallax = Vec2::new(
+                    self.interaction.camera_yaw.sin() * rect.width() * depth,
+                    self.interaction.camera_pitch * rect.height() * depth * 0.35,
+                ) * weight;
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: pivot_position
+                        + Vec2::new(delta.x * cos - delta.y * sin, delta.x * sin + delta.y * cos)
+                        + parallax,
+                    uv: source,
+                    color: Color32::from_white_alpha((255.0 * opacity.clamp(0.0, 1.0)) as u8),
+                });
+            }
+        }
+        for row in 0..ROWS {
+            for column in 0..COLUMNS {
+                let top_left = row * (COLUMNS + 1) + column;
+                let bottom_left = top_left + COLUMNS + 1;
+                mesh.indices.extend_from_slice(&[
+                    top_left,
+                    bottom_left,
+                    top_left + 1,
+                    top_left + 1,
+                    bottom_left,
+                    bottom_left + 1,
+                ]);
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
     }
 
     fn draw_living_photo_weather(
@@ -2931,6 +3041,19 @@ impl VisualizerApp {
                 }
             });
         }
+        if self
+            .studio
+            .layers
+            .get(self.studio.selected)
+            .is_some_and(|layer| layer.kind == StudioLayerKind::Image)
+            && let Some(image) = self.studio.image.as_mut()
+        {
+            ui.checkbox(&mut image.rigged, "2.5D foliage rig")
+                .on_hover_text(
+                    "Three anchored depth meshes bend foreground plants and hanging vines without \
+                     moving the greenhouse frame, table, or frog.",
+                );
+        }
 
         if self
             .studio
@@ -2980,7 +3103,7 @@ impl VisualizerApp {
             );
             ui.label(
                 egui::RichText::new(
-                    "Living Photo · mids move foliage · bass shifts structure · treble drives rain and insects · rare bird",
+                    "Living Photo · real motion + 2.5D rig · bass/mids bend anchored foliage · treble flutters leaves · onsets kick gusts",
                 )
                 .small()
                 .color(Color32::from_rgb(125, 165, 150)),

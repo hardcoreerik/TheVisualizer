@@ -134,11 +134,13 @@ pub struct StudioImage {
     pub size: [usize; 2],
     pub texture: TextureHandle,
     pub motion: Option<StudioMotion>,
+    pub rigged: bool,
 }
 
 pub struct StudioMotion {
     frames: Vec<egui::ColorImage>,
     pub texture: TextureHandle,
+    pub rig_texture: TextureHandle,
     pub mix: f32,
     phase: f32,
     frame: usize,
@@ -252,6 +254,7 @@ impl StudioState {
             size,
             texture,
             motion: None,
+            rigged: false,
         });
         self.notice = Some(format!("Loaded image · {}", path.display()));
         Ok(())
@@ -309,13 +312,20 @@ impl StudioState {
             frames[0].clone(),
             TextureOptions::LINEAR,
         );
+        let rig_texture = context.load_texture(
+            format!("studio-rig:{}", path.display()),
+            rigged_foliage(&frames[0]),
+            TextureOptions::LINEAR,
+        );
         image.motion = Some(StudioMotion {
             frames,
             texture,
+            rig_texture,
             mix: 0.0,
             phase: 0.0,
             frame: 0,
         });
+        image.rigged = true;
         Ok(())
     }
 
@@ -341,9 +351,48 @@ impl StudioState {
             motion
                 .texture
                 .set(motion.frames[frame].clone(), TextureOptions::LINEAR);
+            motion.rig_texture.set(
+                rigged_foliage(&motion.frames[frame]),
+                TextureOptions::LINEAR,
+            );
             context.request_repaint();
         }
     }
+}
+
+fn rigged_foliage(frame: &egui::ColorImage) -> egui::ColorImage {
+    let [width, height] = frame.size;
+    let mut rig = frame.clone();
+    for (index, pixel) in rig.pixels.iter_mut().enumerate() {
+        let point = [
+            (index % width) as f32 / width.max(1) as f32,
+            (index / width) as f32 / height.max(1) as f32,
+        ];
+        let region = rig_region(point);
+        let max_other = pixel.r().max(pixel.b()) as f32;
+        let dominance = (pixel.g() as f32 - max_other).max(0.0);
+        let chroma = pixel.r().max(pixel.g()).max(pixel.b()) as f32
+            - pixel.r().min(pixel.g()).min(pixel.b()) as f32;
+        let foliage = (dominance / 22.0 * 0.72 + chroma / 95.0 * 0.28 - 0.12).clamp(0.0, 1.0);
+        *pixel = egui::Color32::from_rgba_unmultiplied(
+            pixel.r(),
+            pixel.g(),
+            pixel.b(),
+            (255.0 * region * foliage) as u8,
+        );
+    }
+    rig
+}
+
+fn rig_region([x, y]: [f32; 2]) -> f32 {
+    let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| {
+        (1.0 - ((x - cx) / rx).powi(2) - ((y - cy) / ry).powi(2))
+            .clamp(0.0, 1.0)
+            .powi(2)
+    };
+    ellipse(0.16, 0.62, 0.3, 0.42)
+        .max(ellipse(0.88, 0.61, 0.28, 0.42))
+        .max(ellipse(0.48, 0.31, 0.25, 0.34))
 }
 
 fn ping_pong_frame(frame: usize, frame_count: usize) -> usize {
@@ -426,5 +475,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(studio.image.unwrap().motion.unwrap().frames.len(), 49);
+    }
+
+    #[test]
+    fn foliage_rig_keeps_green_plants_and_clears_gray_glass() {
+        let mut frame =
+            egui::ColorImage::new([4, 4], vec![egui::Color32::from_rgb(90, 130, 70); 16]);
+        frame.pixels[0] = egui::Color32::from_rgb(120, 120, 120);
+        let rig = rigged_foliage(&frame);
+        assert_eq!(rig.pixels[0].a(), 0);
+        assert!(rig.pixels[9].a() > 0);
     }
 }

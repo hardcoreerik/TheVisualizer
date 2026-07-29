@@ -23,7 +23,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - A visible `Instrument [I]` panel and matching right-click menu for mode selection, live band meters, grouped per-mode sliders, sound zones, seven palettes, five material finishes, per-band colors, and gradient controls for glow, gloss, and saturation
 - Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts
 - A local Visual Director with rolling Visual DNA, structured novelty-scored scene invention, 17 capture choices, controlled photographic imperfections, preflight critique, generation-ready prompts, durable local brief history, and Markdown brief export without making an API request
-- An experimental Studio layer stack for local images, GPU presets, waveform, and particles, with one original photorealistic `Living Photograph` composition and bounded real foliage motion
+- An experimental Studio layer stack for local images, GPU presets, waveform, and particles, with one original photorealistic `Living Photograph`, bounded real foliage motion, and an optional three-region 2.5D foliage rig
 - Local `.tvpreset` discovery, format-2 grouped parameters, refresh, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and safe shader rejection
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
