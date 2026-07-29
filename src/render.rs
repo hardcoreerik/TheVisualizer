@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, num::NonZeroU64};
+use std::{
+    collections::{HashMap, VecDeque},
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use eframe::{
     egui,
@@ -17,6 +21,7 @@ pub const PRESET_HISTORY_ROWS: usize = 128;
 const PRESET_HISTORY_FLOATS: usize = PRESET_HISTORY_ROWS * SPECTRUM_BANDS;
 pub const PRESET_SCENE_FLOATS: usize = 96;
 pub const PRESET_PARAMETER_FLOATS: usize = 40;
+static NEXT_RENDERER_KEY: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy)]
 pub struct PresetFrame<'a> {
@@ -109,26 +114,25 @@ pub struct GpuPresetRenderer {
     adapter_name: String,
     state: egui_wgpu::RenderState,
     active_id: String,
+    resource_key: u64,
 }
 
 impl GpuPresetRenderer {
     pub fn install(state: &egui_wgpu::RenderState, preset: &Preset) -> Result<Self, String> {
         let resources = create_resources(state, preset)?;
-        state.renderer.write().callback_resources.insert(resources);
+        let resource_key = NEXT_RENDERER_KEY.fetch_add(1, Ordering::Relaxed);
+        insert_resources(state, resource_key, resources);
         Ok(Self {
             adapter_name: state.adapter.get_info().name,
             state: state.clone(),
             active_id: preset.id.clone(),
+            resource_key,
         })
     }
 
     pub fn load(&mut self, preset: &Preset) -> Result<(), String> {
         let resources = create_resources(&self.state, preset)?;
-        self.state
-            .renderer
-            .write()
-            .callback_resources
-            .insert(resources);
+        insert_resources(&self.state, self.resource_key, resources);
         self.active_id.clone_from(&preset.id);
         Ok(())
     }
@@ -142,9 +146,21 @@ impl GpuPresetRenderer {
     }
 
     pub fn paint(&self, painter: &egui::Painter, rect: egui::Rect, frame: PresetFrame<'_>) {
+        self.paint_with_opacity(painter, rect, frame, 1.0);
+    }
+
+    pub fn paint_with_opacity(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        frame: PresetFrame<'_>,
+        opacity: f32,
+    ) {
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
             PresetCallback {
+                resource_key: self.resource_key,
+                opacity: opacity.clamp(0.0, 1.0),
                 uniforms: frame.uniforms([1, 1]),
                 extras: frame.extras(),
                 audio_features: frame.audio_features(),
@@ -152,6 +168,17 @@ impl GpuPresetRenderer {
                 parameters: frame.parameter_state(),
                 spectrum_history: frame.spectrum_history_state(),
             },
+        ));
+    }
+}
+
+fn insert_resources(state: &egui_wgpu::RenderState, key: u64, resources: PresetResources) {
+    let mut renderer = state.renderer.write();
+    if let Some(store) = renderer.callback_resources.get_mut::<PresetResourceStore>() {
+        store.0.insert(key, resources);
+    } else {
+        renderer.callback_resources.insert(PresetResourceStore(
+            [(key, resources)].into_iter().collect(),
         ));
     }
 }
@@ -258,7 +285,22 @@ fn create_resources(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(state.target_format.into())],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: state.target_format,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Constant,
+                        dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Constant,
+                        dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),
@@ -366,6 +408,8 @@ fn concise_validation_error(error: &str) -> String {
 }
 
 struct PresetCallback {
+    resource_key: u64,
+    opacity: f32,
     uniforms: [f32; 8],
     extras: [f32; FRAME_EXTRAS_FLOATS],
     audio_features: [f32; AUDIO_FEATURE_FLOATS],
@@ -383,7 +427,10 @@ impl egui_wgpu::CallbackTrait for PresetCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        if let Some(resources) = resources.get::<PresetResources>() {
+        if let Some(resources) = resources
+            .get::<PresetResourceStore>()
+            .and_then(|store| store.0.get(&self.resource_key))
+        {
             let mut uniforms = self.uniforms;
             uniforms[0] = screen.size_in_pixels[0] as f32;
             uniforms[1] = screen.size_in_pixels[1] as f32;
@@ -427,13 +474,24 @@ impl egui_wgpu::CallbackTrait for PresetCallback {
         render_pass: &mut wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
-        if let Some(resources) = resources.get::<PresetResources>() {
+        if let Some(resources) = resources
+            .get::<PresetResourceStore>()
+            .and_then(|store| store.0.get(&self.resource_key))
+        {
             render_pass.set_pipeline(&resources.pipeline);
             render_pass.set_bind_group(0, &resources.bind_group, &[]);
+            render_pass.set_blend_constant(wgpu::Color {
+                r: self.opacity as f64,
+                g: self.opacity as f64,
+                b: self.opacity as f64,
+                a: self.opacity as f64,
+            });
             render_pass.draw(0..3, 0..1);
         }
     }
 }
+
+struct PresetResourceStore(HashMap<u64, PresetResources>);
 
 struct PresetResources {
     pipeline: wgpu::RenderPipeline,

@@ -2,6 +2,7 @@ mod analysis;
 mod audio;
 mod forge_model;
 mod particle_forge;
+mod performance;
 mod plugin;
 mod preset;
 mod render;
@@ -25,6 +26,7 @@ use particle_forge::{
     ForgeForceKind, ForgeFrame, ForgeQuality, ForgeSceneSource, ForgeTopology,
     ParticleForgeRenderer, ParticleForgeState,
 };
+use performance::{MacroSource, PERFORMANCE_MACROS, PerformanceState, Transition};
 use plugin::{LoadedPlugin, PluginPackage};
 use preset::Preset;
 use render::{
@@ -735,6 +737,7 @@ struct VisualizerApp {
     instrument_panel: bool,
     mode_panel: bool,
     forge_panel: bool,
+    performance_panel: bool,
     visual_director_panel: bool,
     presentation: PresentationMode,
     frame_limit: FrameLimit,
@@ -748,6 +751,8 @@ struct VisualizerApp {
     particle_forge_renderer: Option<ParticleForgeRenderer>,
     particle_forge_error: Option<String>,
     particle_forge: ParticleForgeState,
+    performance: PerformanceState,
+    performance_renderers: [Option<GpuPresetRenderer>; 2],
     gpu_preset: Option<GpuPresetRenderer>,
     plugins: Vec<PluginPackage>,
     plugin_directory: PathBuf,
@@ -820,6 +825,19 @@ impl VisualizerApp {
             (!scene_discovery.errors.is_empty()).then(|| scene_discovery.errors.join("\n"));
         let started = Instant::now();
         let studio = bundled_studio(&creation.egui_ctx);
+        let mut performance = PerformanceState::default();
+        let performance_renderers = std::array::from_fn(|index| {
+            let preset = discovery.presets.get(index)?;
+            performance.assign(index, &preset.id, &preset.name);
+            let state = gpu_state.as_ref()?;
+            match GpuPresetRenderer::install(state, preset) {
+                Ok(renderer) => Some(renderer),
+                Err(error) => {
+                    preset_errors.push(error);
+                    None
+                }
+            }
+        });
 
         let samples = Arc::new(Mutex::new(SampleBuffer::default()));
         let (capture, capture_error) =
@@ -869,6 +887,7 @@ impl VisualizerApp {
             instrument_panel: false,
             mode_panel: false,
             forge_panel: false,
+            performance_panel: false,
             visual_director_panel: false,
             presentation: PresentationMode::Windowed,
             frame_limit: FrameLimit::Display,
@@ -882,6 +901,8 @@ impl VisualizerApp {
             particle_forge_renderer,
             particle_forge_error,
             particle_forge: ParticleForgeState::default(),
+            performance,
+            performance_renderers,
             gpu_preset,
             plugins: plugin_discovery.packages,
             plugin_directory,
@@ -1198,6 +1219,7 @@ impl VisualizerApp {
                 .collect(),
             parameters: self.mode_parameters,
             forge_state: (self.visual == 1).then(|| self.particle_forge.encode_scene()),
+            performance_state: Some(self.performance.encode_scene()),
         })
     }
 
@@ -1233,6 +1255,15 @@ impl VisualizerApp {
             return;
         };
         let snapshot = saved.snapshot;
+        let restored_performance = snapshot
+            .performance_state
+            .as_deref()
+            .map(PerformanceState::decode_scene)
+            .transpose();
+        if let Err(error) = &restored_performance {
+            self.scene_notice = Some(format!("Invalid Performance Studio scene: {error}"));
+            return;
+        }
         let restored_forge = if snapshot.mode_id == "host.particle-forge" {
             Some(
                 snapshot
@@ -1339,6 +1370,13 @@ impl VisualizerApp {
                 (&self.particle_forge_renderer, &self.particle_forge.model)
             {
                 renderer.upload_model(model);
+            }
+        }
+        if let Ok(Some(performance)) = restored_performance {
+            self.performance = performance;
+            let sources = self.performance.decks.clone();
+            for (index, source) in sources.iter().enumerate() {
+                self.assign_performance_source(index, &source.mode_id, &source.mode_name);
             }
         }
         self.scene_notice = Some(format!(
@@ -1485,6 +1523,7 @@ impl VisualizerApp {
             instrument,
             mode_panel,
             forge,
+            performance,
         ) = ctx.input(|input| {
             (
                 input.key_pressed(egui::Key::Tab),
@@ -1504,6 +1543,7 @@ impl VisualizerApp {
                 input.key_pressed(egui::Key::I),
                 input.key_pressed(egui::Key::O),
                 input.key_pressed(egui::Key::F),
+                input.key_pressed(egui::Key::P),
             )
         });
         let direct_visual = ctx.input(|input| {
@@ -1570,6 +1610,9 @@ impl VisualizerApp {
         if forge && self.visual == 1 {
             self.forge_panel = !self.forge_panel;
         }
+        if performance {
+            self.performance_panel = !self.performance_panel;
+        }
         if borderless {
             self.set_presentation(ctx, self.presentation.toggle_borderless());
         }
@@ -1577,7 +1620,9 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.forge_panel {
+            if self.performance_panel {
+                self.performance_panel = false;
+            } else if self.forge_panel {
                 self.forge_panel = false;
             } else if self.mode_panel {
                 self.mode_panel = false;
@@ -1888,6 +1933,7 @@ impl VisualizerApp {
         self.overlay = true;
         self.show_text = true;
         self.particle_forge.reset();
+        self.performance.reset();
         if self.visual == 2
             && let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
                 self.presets
@@ -2092,7 +2138,77 @@ impl VisualizerApp {
             0 => self.draw_scope_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
             1 => self.draw_particle_forge_gpu(painter, rect),
             2 => self.draw_gpu_preset_layer(painter, rect, 1.0),
+            _ if self.performance.live_mix => self.draw_performance_mix(painter, rect),
             _ => self.draw_studio(painter, rect),
+        }
+    }
+
+    fn draw_performance_mix(&self, painter: &egui::Painter, rect: Rect) {
+        let time = self.started.elapsed().as_secs_f32();
+        let mix = self
+            .performance
+            .transition_mix(time, self.features.transient);
+        let scene = self.preset_scene_state();
+        for deck_index in 0..2 {
+            let deck = &self.performance.decks[deck_index];
+            let Some(renderer) = &self.performance_renderers[deck_index] else {
+                continue;
+            };
+            if deck.muted {
+                continue;
+            }
+            let opacity = if deck_index == 0 {
+                deck.level
+            } else {
+                mix * deck.level
+            }
+            .clamp(0.0, 1.0);
+            if opacity <= 0.0 {
+                continue;
+            }
+            let Some(preset) = self
+                .presets
+                .iter()
+                .find(|preset| preset.id == renderer.active_id())
+            else {
+                continue;
+            };
+            let mut parameters = preset_parameter_defaults(preset);
+            if let Some(response) = preset
+                .parameters
+                .iter()
+                .position(|parameter| parameter.id == "response")
+            {
+                parameters[response] = self.gain * self.plugin_multiplier;
+            }
+            let mut deck_scene = scene;
+            shift_scene_hue(&mut deck_scene, deck.hue_shift);
+            renderer.paint_with_opacity(
+                painter,
+                rect,
+                PresetFrame {
+                    time: if self.performance.freeze_output || deck.frozen {
+                        0.0
+                    } else {
+                        time * deck.speed
+                    },
+                    delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.25),
+                    gain: self.gain * self.plugin_multiplier,
+                    waveform: &self.features.waveform,
+                    spectrum: &self.features.spectrum,
+                    low: self.features.low,
+                    mid: self.features.mid,
+                    high: self.features.high,
+                    rms: self.features.rms,
+                    peak: self.features.peak,
+                    onset: self.features.onset,
+                    transient: self.features.transient,
+                    spectrum_history: &self.visual_history.spectra,
+                    scene: &deck_scene,
+                    parameters: &parameters,
+                },
+                opacity,
+            );
         }
     }
 
@@ -3238,7 +3354,7 @@ impl VisualizerApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "<-/-> visual · Up/Down preset · I instrument · O mode · F forge · L labels · Shift+R revert · Tab · Esc",
+                                "<-/-> visual · I instrument · O mode · F forge · P performance · L labels · Shift+R revert · Tab · Esc",
                             )
                             .small()
                             .color(Color32::from_rgb(110, 130, 150)),
@@ -3620,6 +3736,292 @@ impl VisualizerApp {
         self.mode_panel = open;
     }
 
+    fn current_performance_source(&self) -> (String, String) {
+        self.active_scene_identity().unwrap_or_else(|_| {
+            (
+                "host.performance-studio".to_owned(),
+                "Performance Studio".to_owned(),
+            )
+        })
+    }
+
+    fn assign_performance_source(&mut self, deck: usize, mode_id: &str, mode_name: &str) {
+        self.performance.assign(deck, mode_id, mode_name);
+        let Some(slot) = self.performance_renderers.get_mut(deck) else {
+            return;
+        };
+        let Some(preset) = self.presets.iter().find(|preset| preset.id == mode_id) else {
+            *slot = None;
+            return;
+        };
+        let result = if let Some(renderer) = slot {
+            renderer.load(preset)
+        } else if let Some(state) = &self.gpu_state {
+            GpuPresetRenderer::install(state, preset).map(|renderer| *slot = Some(renderer))
+        } else {
+            Err("Performance decks require a wgpu render state.".to_owned())
+        };
+        if let Err(error) = result {
+            self.scene_notice = Some(error);
+        }
+    }
+
+    fn load_performance_deck(&mut self, deck: usize) {
+        let Some(source) = self.performance.decks.get(deck) else {
+            return;
+        };
+        let mode_id = source.mode_id.clone();
+        match mode_id.as_str() {
+            "host.neon-scope" => self.visual = 0,
+            "host.particle-forge" => self.visual = 1,
+            "host.performance-studio" => self.visual = 3,
+            id => {
+                if let Some(index) = self.presets.iter().position(|preset| preset.id == id) {
+                    self.visual = 2;
+                    self.load_preset(index);
+                } else {
+                    self.scene_notice = Some(format!("Deck source `{id}` is unavailable."));
+                }
+            }
+        }
+        self.performance.selected_deck = deck.min(1);
+    }
+
+    fn apply_performance_macro(&mut self, index: usize, value: f32) {
+        let value = value.clamp(0.0, 1.0);
+        match index {
+            0 => self.set_response(0.25 + value * 5.75),
+            1 => {
+                if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
+                    layer.reactivity = value * 2.0;
+                }
+                self.particle_forge.spin[1] = value * 1.5;
+            }
+            2 => {
+                let zoom = 0.35 + value * 2.65;
+                self.interaction.camera_zoom = zoom;
+                self.particle_forge.camera_zoom = zoom;
+            }
+            3 => {
+                self.particle_forge.gradient_shift = value;
+                self.colors.saturation = 0.35 + value * 1.15;
+            }
+            4 => self.particle_forge.twist = value * 2.0,
+            5 => self.colors.gloss = value,
+            6 => {
+                let yaw = (value * 2.0 - 1.0) * std::f32::consts::PI;
+                self.interaction.camera_yaw = yaw;
+                self.particle_forge.camera_yaw = yaw;
+            }
+            7 => self.colors.glow = value * 2.0,
+            8 => {
+                if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
+                    layer.scale = 0.35 + value * 1.65;
+                }
+            }
+            9 => self.colors.saturation = value * 1.5,
+            _ => {}
+        }
+    }
+
+    fn draw_performance_panel(&mut self, ctx: &egui::Context) {
+        let mut open = self.performance_panel;
+        egui::Window::new("PERFORMANCE STUDIO")
+            .id(egui::Id::new("performance-panel"))
+            .anchor(egui::Align2::LEFT_TOP, [20.0, 20.0])
+            .default_width(430.0)
+            .min_width(380.0)
+            .resizable(true)
+            .vscroll(true)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let mut assign = None;
+                let mut take = None;
+                for deck_index in 0..2 {
+                    ui.horizontal(|ui| {
+                        ui.strong(if deck_index == 0 { "DECK A" } else { "DECK B" });
+                        egui::ComboBox::from_id_salt(("performance-deck", deck_index))
+                            .width(220.0)
+                            .selected_text(&self.performance.decks[deck_index].mode_name)
+                            .show_ui(ui, |ui| {
+                                for (mode_id, mode_name) in [
+                                    ("host.neon-scope", "Neon Scope"),
+                                    ("host.particle-forge", "Particle Forge"),
+                                    ("host.performance-studio", "Performance Studio"),
+                                ] {
+                                    if ui
+                                        .selectable_label(
+                                            self.performance.decks[deck_index].mode_id == mode_id,
+                                            mode_name,
+                                        )
+                                        .clicked()
+                                    {
+                                        assign = Some((
+                                            deck_index,
+                                            mode_id.to_owned(),
+                                            mode_name.to_owned(),
+                                        ));
+                                    }
+                                }
+                                ui.separator();
+                                for preset in &self.presets {
+                                    if ui
+                                        .selectable_label(
+                                            self.performance.decks[deck_index].mode_id == preset.id,
+                                            &preset.name,
+                                        )
+                                        .clicked()
+                                    {
+                                        assign = Some((
+                                            deck_index,
+                                            preset.id.clone(),
+                                            preset.name.clone(),
+                                        ));
+                                    }
+                                }
+                            });
+                        if ui.button("Take").clicked() {
+                            take = Some(deck_index);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let deck = &mut self.performance.decks[deck_index];
+                        ui.add(egui::Slider::new(&mut deck.level, 0.0..=1.5).text("Level"));
+                        ui.checkbox(&mut deck.frozen, "Freeze");
+                        ui.checkbox(&mut deck.muted, "Mute");
+                    });
+                    ui.horizontal(|ui| {
+                        let deck = &mut self.performance.decks[deck_index];
+                        ui.add(egui::Slider::new(&mut deck.speed, 0.0..=2.0).text("Speed"));
+                        ui.add(egui::Slider::new(&mut deck.hue_shift, -1.0..=1.0).text("Hue"));
+                    });
+                    ui.separator();
+                }
+                if let Some((deck, mode_id, mode_name)) = assign {
+                    self.assign_performance_source(deck, &mode_id, &mode_name);
+                }
+                if let Some(deck) = take {
+                    self.load_performance_deck(deck);
+                }
+                let (mode_id, mode_name) = self.current_performance_source();
+                ui.horizontal(|ui| {
+                    if ui.button("Assign current → A").clicked() {
+                        self.assign_performance_source(0, &mode_id, &mode_name);
+                    }
+                    if ui.button("Assign current → B").clicked() {
+                        self.assign_performance_source(1, &mode_id, &mode_name);
+                    }
+                    if ui.button("Swap A/B").clicked() {
+                        self.performance.swap();
+                        self.performance_renderers.swap(0, 1);
+                    }
+                });
+                ui.add(
+                    egui::Slider::new(&mut self.performance.crossfader, 0.0..=1.0)
+                        .text("A  ◀ Crossfader ▶  B")
+                        .show_value(false),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Transition");
+                    egui::ComboBox::from_id_salt("performance-transition")
+                        .selected_text(self.performance.transition.label())
+                        .show_ui(ui, |ui| {
+                            for transition in Transition::ALL {
+                                ui.selectable_value(
+                                    &mut self.performance.transition,
+                                    transition,
+                                    transition.label(),
+                                );
+                            }
+                        });
+                });
+                ui.add(
+                    egui::Slider::new(&mut self.performance.transition_softness, 0.0..=1.0)
+                        .text("Edge softness"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.performance.transition_seconds, 0.05..=16.0)
+                        .logarithmic(true)
+                        .text("Transition seconds"),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(&mut self.performance.live_mix, "Live A/B mix")
+                        .clicked()
+                        && self.performance.live_mix
+                    {
+                        self.visual = 3;
+                    }
+                    ui.checkbox(&mut self.performance.beat_sync, "Beat-sync");
+                    ui.checkbox(&mut self.performance.auto_take, "Auto-take");
+                    ui.checkbox(&mut self.performance.freeze_output, "Freeze output");
+                    ui.checkbox(&mut self.performance.blackout, "Blackout");
+                });
+                ui.separator();
+                ui.strong("PERFORMANCE MACROS");
+                let mut changed_macro = None;
+                for index in 0..PERFORMANCE_MACROS {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(
+                                self.performance.selected_macro == index,
+                                PerformanceState::MACRO_LABELS[index],
+                            )
+                            .clicked()
+                        {
+                            self.performance.selected_macro = index;
+                        }
+                        if ui
+                            .add(
+                                egui::Slider::new(
+                                    &mut self.performance.macros[index].value,
+                                    0.0..=1.0,
+                                )
+                                .show_value(true),
+                            )
+                            .changed()
+                        {
+                            changed_macro = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = changed_macro {
+                    self.apply_performance_macro(index, self.performance.macros[index].value);
+                }
+                let selected = self.performance.selected_macro.min(PERFORMANCE_MACROS - 1);
+                egui::CollapsingHeader::new(format!(
+                    "{} modulation",
+                    PerformanceState::MACRO_LABELS[selected]
+                ))
+                .show(ui, |ui| {
+                    let control = &mut self.performance.macros[selected];
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut control.enabled, "Audio enabled");
+                        egui::ComboBox::from_id_salt(("performance-macro-source", selected))
+                            .selected_text(control.source.label())
+                            .show_ui(ui, |ui| {
+                                for source in MacroSource::ALL {
+                                    ui.selectable_value(
+                                        &mut control.source,
+                                        source,
+                                        source.label(),
+                                    );
+                                }
+                            });
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut control.audio_amount, -1.0..=1.0)
+                            .text("Audio amount"),
+                    );
+                    ui.add(egui::Slider::new(&mut control.attack, 0.0..=2.0).text("Attack"));
+                    ui.add(egui::Slider::new(&mut control.release, 0.0..=4.0).text("Release"));
+                    ui.add(egui::Slider::new(&mut control.curve, 0.25..=4.0).text("Curve"));
+                    ui.checkbox(&mut control.inverted, "Invert");
+                });
+            });
+        self.performance_panel = open;
+    }
+
     fn draw_forge_panel(&mut self, ctx: &egui::Context) {
         let mut open = self.forge_panel;
         egui::Window::new("FORGE NODE")
@@ -3811,6 +4213,9 @@ impl VisualizerApp {
                     ui.checkbox(&mut self.show_text, "Show visual text [L]");
                     if ui.button("Mode controls [O]").clicked() {
                         self.mode_panel = true;
+                    }
+                    if ui.button("Performance [P]").clicked() {
+                        self.performance_panel = true;
                     }
                     if ui.button("Revert all [Shift+R]").clicked() {
                         self.revert_all(ctx);
@@ -4649,6 +5054,22 @@ impl eframe::App for VisualizerApp {
         }
         self.update_default_device();
         self.update_features();
+        let macro_values = self.performance.update_macros(
+            [
+                self.features.rms,
+                self.features.low,
+                self.features.mid,
+                self.features.high,
+                self.features.transient,
+                self.features.onset,
+            ],
+            (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1),
+        );
+        for (index, value) in macro_values.into_iter().enumerate() {
+            if let Some(value) = value {
+                self.apply_performance_macro(index, value);
+            }
+        }
         let forge_decay =
             (-6.0 * (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1)).exp();
         self.particle_forge.event_envelope = self
@@ -4696,6 +5117,9 @@ impl eframe::App for VisualizerApp {
         } else {
             self.draw_zone_handles(&ui.painter_at(rect), rect);
         }
+        if self.performance.blackout {
+            ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
+        }
         if self.overlay && self.show_text {
             self.draw_overlay(ui.ctx());
         }
@@ -4707,6 +5131,9 @@ impl eframe::App for VisualizerApp {
         }
         if self.forge_panel && self.visual == 1 {
             self.draw_forge_panel(ui.ctx());
+        }
+        if self.performance_panel {
+            self.draw_performance_panel(ui.ctx());
         }
         if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
             ui.painter().rect_filled(
@@ -4753,6 +5180,35 @@ fn forge_node_position(rect: Rect, position: [f32; 3]) -> Pos2 {
 
 fn shifted_frequency(frequency: f32, shift: f32) -> f32 {
     (frequency + shift).rem_euclid(1.0)
+}
+
+fn shift_scene_hue(scene: &mut [f32; PRESET_SCENE_FLOATS], shift: f32) {
+    let phase = shift.rem_euclid(1.0) * 3.0;
+    for offset in (72..92).step_by(4) {
+        let color = [scene[offset], scene[offset + 1], scene[offset + 2]];
+        let rotated = if phase < 1.0 {
+            [
+                egui::lerp(color[0]..=color[1], phase),
+                egui::lerp(color[1]..=color[2], phase),
+                egui::lerp(color[2]..=color[0], phase),
+            ]
+        } else if phase < 2.0 {
+            let phase = phase - 1.0;
+            [
+                egui::lerp(color[1]..=color[2], phase),
+                egui::lerp(color[2]..=color[0], phase),
+                egui::lerp(color[0]..=color[1], phase),
+            ]
+        } else {
+            let phase = phase - 2.0;
+            [
+                egui::lerp(color[2]..=color[0], phase),
+                egui::lerp(color[0]..=color[1], phase),
+                egui::lerp(color[1]..=color[2], phase),
+            ]
+        };
+        scene[offset..offset + 3].copy_from_slice(&rotated);
+    }
 }
 
 fn gradient_value_control(
