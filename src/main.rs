@@ -1,5 +1,6 @@
 mod analysis;
 mod audio;
+mod particle_forge;
 mod plugin;
 mod preset;
 mod render;
@@ -18,6 +19,10 @@ use analysis::{Analyzer, FFT_SIZE, Features};
 use audio::{AudioCapture, AudioDevice, SampleBuffer, SharedSamples, SourceKind};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
+use particle_forge::{
+    ForgeForceKind, ForgeFrame, ForgeQuality, ForgeSceneSource, ForgeTopology,
+    ParticleForgeRenderer, ParticleForgeState,
+};
 use plugin::{LoadedPlugin, PluginPackage};
 use preset::Preset;
 use render::{
@@ -595,6 +600,7 @@ impl FrameLimit {
     }
 }
 
+#[cfg(test)]
 fn pacing_delay(limit: FrameLimit, elapsed: Duration) -> Option<Duration> {
     limit.interval()?.checked_sub(elapsed)
 }
@@ -726,18 +732,20 @@ struct VisualizerApp {
     show_text: bool,
     instrument_panel: bool,
     mode_panel: bool,
+    forge_panel: bool,
     visual_director_panel: bool,
     presentation: PresentationMode,
     frame_limit: FrameLimit,
     last_paced_frame: Instant,
     gain: f32,
-    particle_reverse: bool,
-    particle_gradient_shift: f32,
     started: Instant,
     presets: Vec<Preset>,
     preset_directory: PathBuf,
     preset_error: Option<String>,
     gpu_state: Option<RenderState>,
+    particle_forge_renderer: Option<ParticleForgeRenderer>,
+    particle_forge_error: Option<String>,
+    particle_forge: ParticleForgeState,
     gpu_preset: Option<GpuPresetRenderer>,
     plugins: Vec<PluginPackage>,
     plugin_directory: PathBuf,
@@ -766,6 +774,18 @@ impl VisualizerApp {
         let discovery = preset::discover(&preset_directory);
         let mut preset_errors = discovery.errors;
         let gpu_state = creation.wgpu_render_state.clone();
+        let (particle_forge_renderer, particle_forge_error) = gpu_state.as_ref().map_or_else(
+            || {
+                (
+                    None,
+                    Some("Particle Forge requires a wgpu render state.".to_owned()),
+                )
+            },
+            |state| match ParticleForgeRenderer::install(state) {
+                Ok(renderer) => (Some(renderer), None),
+                Err(error) => (None, Some(error)),
+            },
+        );
         let mut gpu_preset = None;
         if let Some(state) = &gpu_state {
             for preset in &discovery.presets {
@@ -846,18 +866,20 @@ impl VisualizerApp {
             show_text: true,
             instrument_panel: false,
             mode_panel: false,
+            forge_panel: false,
             visual_director_panel: false,
             presentation: PresentationMode::Windowed,
             frame_limit: FrameLimit::Display,
             last_paced_frame: started,
             gain,
-            particle_reverse: false,
-            particle_gradient_shift: 0.0,
             started,
             presets: discovery.presets,
             preset_directory,
             preset_error,
             gpu_state,
+            particle_forge_renderer,
+            particle_forge_error,
+            particle_forge: ParticleForgeState::default(),
             gpu_preset,
             plugins: plugin_discovery.packages,
             plugin_directory,
@@ -1339,7 +1361,17 @@ impl VisualizerApp {
     }
 
     fn pace_frame(&mut self) {
-        if let Some(delay) = pacing_delay(self.frame_limit, self.last_paced_frame.elapsed()) {
+        let interval = if self.visual == 1 {
+            self.particle_forge
+                .quality
+                .frame_rate()
+                .map(|rate| Duration::from_secs_f64(1.0 / f64::from(rate)))
+        } else {
+            self.frame_limit.interval()
+        };
+        if let Some(delay) =
+            interval.and_then(|interval| interval.checked_sub(self.last_paced_frame.elapsed()))
+        {
             std::thread::sleep(delay);
         }
         self.last_paced_frame = Instant::now();
@@ -1419,6 +1451,7 @@ impl VisualizerApp {
             labels,
             instrument,
             mode_panel,
+            forge,
         ) = ctx.input(|input| {
             (
                 input.key_pressed(egui::Key::Tab),
@@ -1437,6 +1470,7 @@ impl VisualizerApp {
                 input.key_pressed(egui::Key::L),
                 input.key_pressed(egui::Key::I),
                 input.key_pressed(egui::Key::O),
+                input.key_pressed(egui::Key::F),
             )
         });
         let direct_visual = ctx.input(|input| {
@@ -1492,6 +1526,9 @@ impl VisualizerApp {
         if mode_panel {
             self.mode_panel = !self.mode_panel;
         }
+        if forge && self.visual == 1 {
+            self.forge_panel = !self.forge_panel;
+        }
         if borderless {
             self.set_presentation(ctx, self.presentation.toggle_borderless());
         }
@@ -1499,7 +1536,9 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.mode_panel {
+            if self.forge_panel {
+                self.forge_panel = false;
+            } else if self.mode_panel {
                 self.mode_panel = false;
             } else if self.instrument_panel {
                 self.instrument_panel = false;
@@ -1512,6 +1551,10 @@ impl VisualizerApp {
     }
 
     fn interact_visual(&mut self, response: &egui::Response, rect: Rect) {
+        if self.visual == 1 {
+            self.interact_forge(response, rect);
+            return;
+        }
         let pointer = response.interact_pointer_pos();
         if response.secondary_clicked()
             && let Some(pointer) = pointer
@@ -1632,6 +1675,125 @@ impl VisualizerApp {
         }
     }
 
+    fn nearest_forge_node(&self, rect: Rect, pointer: Pos2) -> Option<usize> {
+        self.particle_forge
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                let distance = forge_node_position(rect, node.position).distance(pointer);
+                (distance < (node.radius * 42.0).max(20.0)).then_some((index, distance))
+            })
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+            .map(|(index, _)| index)
+    }
+
+    fn interact_forge(&mut self, response: &egui::Response, rect: Rect) {
+        let pointer = response.interact_pointer_pos();
+        if response.secondary_clicked()
+            && let Some(pointer) = pointer
+        {
+            if let Some(index) = self.nearest_forge_node(rect, pointer) {
+                self.particle_forge.selected = Some(index);
+                self.particle_forge.nodes[index].band =
+                    (self.particle_forge.nodes[index].band + 1) % 4;
+            } else {
+                let normalized = normalize_visual_position(rect, pointer);
+                self.particle_forge.add_node([
+                    (normalized.x - 0.5) * 4.0,
+                    (0.5 - normalized.y) * 2.8,
+                    0.0,
+                ]);
+            }
+        }
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && let Some(pointer) = pointer
+        {
+            self.particle_forge.selected = self.nearest_forge_node(rect, pointer);
+            self.particle_forge.drag_origin = self
+                .particle_forge
+                .selected
+                .and_then(|index| self.particle_forge.nodes.get(index))
+                .map(|node| node.position);
+            self.particle_forge.camera_drag_origin =
+                self.particle_forge.selected.is_none().then_some([
+                    self.particle_forge.camera_yaw,
+                    self.particle_forge.camera_pitch,
+                ]);
+        }
+        if response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary)
+        {
+            let delta = response.drag_delta();
+            if let Some(origin) = self.particle_forge.drag_origin
+                && let Some(node) = self
+                    .particle_forge
+                    .selected
+                    .and_then(|index| self.particle_forge.nodes.get_mut(index))
+            {
+                node.position[0] =
+                    (origin[0] + delta.x / rect.width().max(1.0) * 4.0).clamp(-3.0, 3.0);
+                node.position[1] =
+                    (origin[1] - delta.y / rect.height().max(1.0) * 2.8).clamp(-2.5, 2.5);
+            } else if let Some(origin) = self.particle_forge.camera_drag_origin {
+                self.particle_forge.camera_yaw = origin[0] - delta.x * 0.008;
+                self.particle_forge.camera_pitch = (origin[1] + delta.y * 0.004).clamp(-1.2, 1.2);
+            }
+        }
+        if response.drag_stopped_by(egui::PointerButton::Primary) {
+            self.particle_forge.drag_origin = None;
+            self.particle_forge.camera_drag_origin = None;
+        }
+        if response.drag_started_by(egui::PointerButton::Secondary)
+            && let Some(pointer) = pointer
+        {
+            self.particle_forge.selected = self.nearest_forge_node(rect, pointer);
+            self.particle_forge.secondary_drag_origin = self
+                .particle_forge
+                .selected
+                .and_then(|index| self.particle_forge.nodes.get(index))
+                .map(|node| [node.radius, node.strength]);
+        }
+        if response.dragged_by(egui::PointerButton::Secondary)
+            || response.drag_stopped_by(egui::PointerButton::Secondary)
+        {
+            let delta = response.drag_delta();
+            if let Some(origin) = self.particle_forge.secondary_drag_origin
+                && let Some(node) = self
+                    .particle_forge
+                    .selected
+                    .and_then(|index| self.particle_forge.nodes.get_mut(index))
+            {
+                node.radius = (origin[0] + delta.x / rect.width().max(1.0) * 1.5).clamp(0.08, 1.5);
+                node.strength =
+                    (origin[1] - delta.y / rect.height().max(1.0) * 3.0).clamp(0.0, 3.0);
+            }
+        }
+        if response.drag_stopped_by(egui::PointerButton::Secondary) {
+            self.particle_forge.secondary_drag_origin = None;
+        }
+        if response.hovered() {
+            let (scroll, shift) = response
+                .ctx
+                .input(|input| (input.smooth_scroll_delta.y, input.modifiers.shift));
+            if scroll != 0.0 {
+                if shift {
+                    if let Some(node) = self
+                        .particle_forge
+                        .selected
+                        .and_then(|index| self.particle_forge.nodes.get_mut(index))
+                    {
+                        node.position[2] = (node.position[2] + scroll * 0.0025).clamp(-2.5, 2.5);
+                    }
+                } else {
+                    self.particle_forge.camera_zoom = (self.particle_forge.camera_zoom
+                        * (-scroll * 0.0015).exp())
+                    .clamp(0.35, 3.0);
+                }
+            }
+        }
+    }
+
     fn reset_interaction(&mut self) {
         let cityscape = self.visual == 2
             && self
@@ -1678,8 +1840,7 @@ impl VisualizerApp {
         self.studio = bundled_studio(ctx);
         self.overlay = true;
         self.show_text = true;
-        self.particle_reverse = false;
-        self.particle_gradient_shift = 0.0;
+        self.particle_forge.reset();
         if self.visual == 2
             && let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
                 self.presets
@@ -1772,6 +1933,42 @@ impl VisualizerApp {
         }
     }
 
+    fn draw_forge_handles(&self, painter: &egui::Painter, rect: Rect) {
+        for (index, node) in self.particle_forge.nodes.iter().enumerate() {
+            let center = forge_node_position(rect, node.position);
+            let selected = self.particle_forge.selected == Some(index);
+            let color = self.colors.band_color(ZoneBand::from_code(node.band));
+            let radius = (node.radius * 42.0).max(12.0);
+            painter.circle_stroke(
+                center,
+                radius,
+                Stroke::new(
+                    if selected { 2.0 } else { 1.0 },
+                    color.gamma_multiply(if selected { 0.85 } else { 0.35 }),
+                ),
+            );
+            painter.circle_filled(center, if selected { 5.0 } else { 3.0 }, color);
+            if selected && self.particle_forge.gizmo {
+                for (offset, axis_color) in [
+                    (Vec2::new(34.0, 0.0), Color32::RED),
+                    (Vec2::new(0.0, -34.0), Color32::GREEN),
+                    (Vec2::new(24.0, 24.0), Color32::BLUE),
+                ] {
+                    painter.line_segment([center, center + offset], Stroke::new(2.0, axis_color));
+                }
+            }
+            if selected && self.show_text {
+                painter.text(
+                    center + Vec2::new(radius + 6.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{} · {}", index + 1, node.kind.label()),
+                    egui::FontId::monospace(10.0),
+                    color,
+                );
+            }
+        }
+    }
+
     fn preset_scene_state(&self) -> [f32; PRESET_SCENE_FLOATS] {
         let mut state = [0.0; PRESET_SCENE_FLOATS];
         state[0] = self.interaction.zones.len() as f32;
@@ -1843,10 +2040,47 @@ impl VisualizerApp {
 
         match self.visual {
             0 => self.draw_scope_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
-            1 => self.draw_particles_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
+            1 => self.draw_particle_forge_gpu(painter, rect),
             2 => self.draw_gpu_preset_layer(painter, rect, 1.0),
             _ => self.draw_studio(painter, rect),
         }
+    }
+
+    fn draw_particle_forge_gpu(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(renderer) = &self.particle_forge_renderer else {
+            self.draw_particles_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0);
+            return;
+        };
+        let mut forge = self.particle_forge.clone();
+        forge.apply_modulation([
+            self.features.low,
+            self.features.mid,
+            self.features.high,
+            self.features.rms,
+            self.features.onset,
+            self.features.transient,
+        ]);
+        renderer.paint(
+            painter,
+            rect,
+            ForgeFrame {
+                time: self.started.elapsed().as_secs_f32(),
+                delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.05),
+                gain: self.gain,
+                low: self.features.low,
+                mid: self.features.mid,
+                high: self.features.high,
+                rms: self.features.rms,
+                onset: self.features.onset,
+                transient: self.features.transient,
+                state: &forge,
+                colors: [
+                    self.colors.bass.to_normalized_gamma_f32(),
+                    self.colors.mid.to_normalized_gamma_f32(),
+                    self.colors.treble.to_normalized_gamma_f32(),
+                ],
+            },
+        );
     }
 
     fn draw_gpu_preset_layer(&self, painter: &egui::Painter, rect: Rect, drive: f32) {
@@ -2414,7 +2648,11 @@ impl VisualizerApp {
         detail_step: usize,
     ) {
         let time = self.started.elapsed().as_secs_f32();
-        let direction = if self.particle_reverse { -1.0 } else { 1.0 };
+        let direction = if self.particle_forge.reverse {
+            -1.0
+        } else {
+            1.0
+        };
         let mut current_points = Vec::new();
         for (trail, spectrum) in spectra.iter().enumerate() {
             let age = (trail + 1) as f32 / spectra.len() as f32;
@@ -2427,8 +2665,10 @@ impl VisualizerApp {
                 let radius = scale * (0.15 + frequency.powf(0.72) * 0.27 + value * 0.31);
                 let point = center + Vec2::new(angle.cos() * radius, angle.sin() * radius * 0.78);
                 let color = Self::studio_color(
-                    self.colors
-                        .spectrum_color(shifted_frequency(frequency, self.particle_gradient_shift)),
+                    self.colors.spectrum_color(shifted_frequency(
+                        frequency,
+                        self.particle_forge.gradient_shift,
+                    )),
                     opacity * (0.12 + age * 0.7),
                     blend,
                 );
@@ -2771,6 +3011,14 @@ impl VisualizerApp {
                             {
                                 self.mode_panel = !self.mode_panel;
                             }
+                            if self.visual == 1
+                                && ui
+                                    .selectable_label(self.forge_panel, "Forge [F]")
+                                    .on_hover_text("Inspect the selected 3D force node.")
+                                    .clicked()
+                            {
+                                self.forge_panel = !self.forge_panel;
+                            }
                         });
                         let details_label = if self.visual == 2 && !self.plugins.is_empty() {
                             "DETAILS & EXTENSIONS"
@@ -2797,7 +3045,23 @@ impl VisualizerApp {
                                     .color(Color32::from_rgb(145, 165, 185)),
                                 );
                             }
-                            if let Some(renderer) = &self.gpu_preset {
+                            if self.visual == 1
+                                && let Some(renderer) = &self.particle_forge_renderer
+                            {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "GPU FORGE · {} · {} particles",
+                                        renderer.adapter_name(),
+                                        self.particle_forge.quality.particle_count()
+                                    ))
+                                    .small()
+                                    .color(Color32::from_rgb(115, 145, 175)),
+                                );
+                            } else if self.visual == 1
+                                && let Some(error) = &self.particle_forge_error
+                            {
+                                ui.colored_label(Color32::from_rgb(255, 145, 90), error);
+                            } else if let Some(renderer) = &self.gpu_preset {
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "GPU · {}",
@@ -3198,15 +3462,86 @@ impl VisualizerApp {
                 .fixed_decimals(2),
         );
         if self.visual == 1 {
-            ui.checkbox(&mut self.particle_reverse, "Reverse direction");
+            ui.horizontal(|ui| {
+                ui.label("Quality");
+                egui::ComboBox::from_id_salt("forge-quality")
+                    .selected_text(self.particle_forge.quality.label())
+                    .show_ui(ui, |ui| {
+                        for quality in ForgeQuality::ALL {
+                            ui.selectable_value(
+                                &mut self.particle_forge.quality,
+                                quality,
+                                quality.label(),
+                            );
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Source");
+                egui::ComboBox::from_id_salt("forge-source")
+                    .selected_text(self.particle_forge.source.label())
+                    .show_ui(ui, |ui| {
+                        for source in ForgeSceneSource::ALL {
+                            ui.selectable_value(
+                                &mut self.particle_forge.source,
+                                source,
+                                source.label(),
+                            );
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Topology");
+                egui::ComboBox::from_id_salt("forge-topology")
+                    .selected_text(self.particle_forge.topology.label())
+                    .show_ui(ui, |ui| {
+                        for topology in ForgeTopology::ALL {
+                            ui.selectable_value(
+                                &mut self.particle_forge.topology,
+                                topology,
+                                topology.label(),
+                            );
+                        }
+                    });
+            });
+            ui.add(
+                egui::Slider::new(&mut self.particle_forge.topology_morph, 0.0..=1.0)
+                    .text("Topology morph"),
+            );
+            for (axis, label) in ["Spin X", "Spin Y", "Spin Z"].into_iter().enumerate() {
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.spin[axis], -1.5..=1.5).text(label),
+                );
+            }
+            ui.add(egui::Slider::new(&mut self.particle_forge.twist, 0.0..=2.0).text("Twist"));
+            ui.add(
+                egui::Slider::new(&mut self.particle_forge.precession, 0.0..=1.0)
+                    .text("Precession"),
+            );
+            ui.checkbox(&mut self.particle_forge.reverse, "Reverse direction");
+            ui.checkbox(&mut self.particle_forge.auto_camera, "Automatic camera");
             gradient_value_control(
                 ui,
                 "Gradient shift",
-                &mut self.particle_gradient_shift,
+                &mut self.particle_forge.gradient_shift,
                 0.0,
                 1.0,
                 self.colors.bass,
                 self.colors.treble,
+            );
+            ui.separator();
+            ui.label("Material families");
+            ui.add(
+                egui::Slider::new(&mut self.particle_forge.materials.energy, 0.0..=1.0)
+                    .text("Energy"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.particle_forge.materials.cyber, 0.0..=1.0)
+                    .text("Cyber"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.particle_forge.materials.cosmic, 0.0..=1.0)
+                    .text("Cosmic"),
             );
         }
     }
@@ -3221,6 +3556,123 @@ impl VisualizerApp {
             .open(&mut open)
             .show(ctx, |ui| self.draw_mode_controls(ui));
         self.mode_panel = open;
+    }
+
+    fn draw_forge_panel(&mut self, ctx: &egui::Context) {
+        let mut open = self.forge_panel;
+        egui::Window::new("FORGE NODE")
+            .id(egui::Id::new("forge-panel"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [20.0, -20.0])
+            .default_width(360.0)
+            .resizable(true)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for index in 0..self.particle_forge.nodes.len() {
+                        if ui
+                            .selectable_label(
+                                self.particle_forge.selected == Some(index),
+                                format!("{}", index + 1),
+                            )
+                            .clicked()
+                        {
+                            self.particle_forge.selected = Some(index);
+                        }
+                    }
+                    if ui
+                        .add_enabled(
+                            self.particle_forge.nodes.len() < particle_forge::MAX_FORGE_NODES,
+                            egui::Button::new("Add"),
+                        )
+                        .clicked()
+                    {
+                        self.particle_forge.add_node([0.0, 0.0, 0.0]);
+                    }
+                });
+                let mut remove = false;
+                if let Some(node) = self
+                    .particle_forge
+                    .selected
+                    .and_then(|index| self.particle_forge.nodes.get_mut(index))
+                {
+                    egui::ComboBox::from_id_salt("forge-force-kind")
+                        .selected_text(node.kind.label())
+                        .show_ui(ui, |ui| {
+                            for kind in ForgeForceKind::ALL {
+                                ui.selectable_value(&mut node.kind, kind, kind.label());
+                            }
+                        });
+                    egui::ComboBox::from_id_salt("forge-node-band")
+                        .selected_text(["Full", "Low", "Mid", "High"][node.band as usize])
+                        .show_ui(ui, |ui| {
+                            for (band, label) in ["Full", "Low", "Mid", "High"].iter().enumerate() {
+                                ui.selectable_value(&mut node.band, band as u8, *label);
+                            }
+                        });
+                    ui.add(egui::Slider::new(&mut node.radius, 0.08..=1.5).text("Radius"));
+                    ui.add(egui::Slider::new(&mut node.strength, 0.0..=3.0).text("Strength"));
+                    ui.add(egui::Slider::new(&mut node.falloff, 0.25..=4.0).text("Falloff"));
+                    ui.add(egui::Slider::new(&mut node.position[2], -2.5..=2.5).text("Depth Z"));
+                    for (axis, label) in ["Axis X", "Axis Y", "Axis Z"].into_iter().enumerate() {
+                        ui.add(
+                            egui::Slider::new(&mut node.spin_axis[axis], -1.0..=1.0).text(label),
+                        );
+                    }
+                    ui.checkbox(&mut node.pinned, "Pinned");
+                    ui.checkbox(&mut self.particle_forge.gizmo, "Show XYZ gizmo");
+                    remove = ui
+                        .add_enabled(!node.pinned, egui::Button::new("Remove node"))
+                        .clicked();
+                }
+                if remove && let Some(index) = self.particle_forge.selected {
+                    self.particle_forge.nodes.remove(index);
+                    self.particle_forge.selected = (!self.particle_forge.nodes.is_empty())
+                        .then(|| index.min(self.particle_forge.nodes.len() - 1));
+                }
+                ui.separator();
+                egui::CollapsingHeader::new(format!(
+                    "Modulation routes · {}/{}",
+                    self.particle_forge.routes.len(),
+                    particle_forge::MAX_FORGE_ROUTES
+                ))
+                .show(ui, |ui| {
+                    if ui
+                        .add_enabled(
+                            self.particle_forge.routes.len() < particle_forge::MAX_FORGE_ROUTES,
+                            egui::Button::new("Add route"),
+                        )
+                        .clicked()
+                    {
+                        self.particle_forge
+                            .routes
+                            .push(particle_forge::ForgeModRoute {
+                                source: 0,
+                                target: 0,
+                                amount: 0.5,
+                                enabled: true,
+                            });
+                    }
+                    let mut remove_route = None;
+                    for (index, route) in self.particle_forge.routes.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut route.enabled, "");
+                            ui.add(egui::DragValue::new(&mut route.source).range(0..=5));
+                            ui.label("→");
+                            ui.add(egui::DragValue::new(&mut route.target).range(0..=7));
+                            ui.add(
+                                egui::Slider::new(&mut route.amount, -2.0..=2.0).show_value(true),
+                            );
+                            if ui.small_button("×").clicked() {
+                                remove_route = Some(index);
+                            }
+                        });
+                    }
+                    if let Some(index) = remove_route {
+                        self.particle_forge.routes.remove(index);
+                    }
+                });
+            });
+        self.forge_panel = open;
     }
 
     fn draw_instrument_panel(&mut self, ctx: &egui::Context) {
@@ -4087,6 +4539,12 @@ impl eframe::App for VisualizerApp {
         }
         self.update_default_device();
         self.update_features();
+        let forge_decay =
+            (-6.0 * (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1)).exp();
+        self.particle_forge.event_envelope = self
+            .features
+            .onset
+            .max(self.particle_forge.event_envelope * forge_decay);
         self.studio.animate_motion(
             ctx,
             (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1),
@@ -4099,11 +4557,19 @@ impl eframe::App for VisualizerApp {
             ],
         );
         self.update_plugin();
-        ctx.request_repaint_after(
+        let repaint = if self.visual == 1 {
+            self.particle_forge
+                .quality
+                .frame_rate()
+                .map_or(Duration::ZERO, |rate| {
+                    Duration::from_secs_f64(1.0 / f64::from(rate))
+                })
+        } else {
             self.frame_limit
                 .interval()
-                .unwrap_or(Duration::from_millis(16)),
-        );
+                .unwrap_or(Duration::from_millis(16))
+        };
+        ctx.request_repaint_after(repaint);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -4115,7 +4581,11 @@ impl eframe::App for VisualizerApp {
         );
         self.interact_visual(&response, rect);
         self.draw_visual(&ui.painter_at(rect), rect);
-        self.draw_zone_handles(&ui.painter_at(rect), rect);
+        if self.visual == 1 {
+            self.draw_forge_handles(&ui.painter_at(rect), rect);
+        } else {
+            self.draw_zone_handles(&ui.painter_at(rect), rect);
+        }
         if self.overlay && self.show_text {
             self.draw_overlay(ui.ctx());
         }
@@ -4124,6 +4594,9 @@ impl eframe::App for VisualizerApp {
         }
         if self.mode_panel {
             self.draw_mode_panel(ui.ctx());
+        }
+        if self.forge_panel && self.visual == 1 {
+            self.draw_forge_panel(ui.ctx());
         }
         if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
             ui.painter().rect_filled(
@@ -4157,6 +4630,14 @@ fn visual_position(rect: Rect, position: Vec2) -> Pos2 {
     Pos2::new(
         egui::lerp(rect.left()..=rect.right(), position.x),
         egui::lerp(rect.top()..=rect.bottom(), position.y),
+    )
+}
+
+fn forge_node_position(rect: Rect, position: [f32; 3]) -> Pos2 {
+    let depth_scale = (1.0 + position[2] * 0.12).clamp(0.55, 1.45);
+    Pos2::new(
+        rect.center().x + position[0] / 4.0 * rect.width() * depth_scale,
+        rect.center().y - position[1] / 2.8 * rect.height() * depth_scale,
     )
 }
 
