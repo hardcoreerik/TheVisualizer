@@ -111,6 +111,61 @@ impl ZoneBand {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ZoneVisualKind {
+    PulseTrace,
+    SpectrumSkyline,
+    RadialBurst,
+    SpectrogramCity,
+    SpectralTerrain,
+    WaveTunnel,
+    ParticleOcean,
+    WireframeTerrain,
+    HaloSpectrum,
+    AtomicOrbits,
+}
+
+impl ZoneVisualKind {
+    const ALL: [Self; 10] = [
+        Self::PulseTrace,
+        Self::SpectrumSkyline,
+        Self::RadialBurst,
+        Self::SpectrogramCity,
+        Self::SpectralTerrain,
+        Self::WaveTunnel,
+        Self::ParticleOcean,
+        Self::WireframeTerrain,
+        Self::HaloSpectrum,
+        Self::AtomicOrbits,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::PulseTrace => "Pulse Trace",
+            Self::SpectrumSkyline => "Spectrum Skyline",
+            Self::RadialBurst => "Radial Burst",
+            Self::SpectrogramCity => "Spectrogram City",
+            Self::SpectralTerrain => "Spectral Terrain",
+            Self::WaveTunnel => "Wave Tunnel",
+            Self::ParticleOcean => "Particle Ocean",
+            Self::WireframeTerrain => "Wireframe Terrain",
+            Self::HaloSpectrum => "Halo Spectrum",
+            Self::AtomicOrbits => "Atomic Orbits",
+        }
+    }
+
+    fn code(self) -> u8 {
+        self as u8
+    }
+
+    fn from_code(code: u8) -> Self {
+        Self::ALL
+            .get(usize::from(code))
+            .copied()
+            .unwrap_or(Self::PulseTrace)
+    }
+}
+
 #[derive(Clone)]
 struct SoundZone {
     position: Vec2,
@@ -118,6 +173,13 @@ struct SoundZone {
     strength: f32,
     band: ZoneBand,
     pinned: bool,
+    kind: ZoneVisualKind,
+    rotation: f32,
+    speed: f32,
+    density: f32,
+    thickness: f32,
+    trail: f32,
+    color_shift: f32,
 }
 
 impl SoundZone {
@@ -128,6 +190,13 @@ impl SoundZone {
             strength: 1.0,
             band: ZoneBand::Full,
             pinned: false,
+            kind: ZoneVisualKind::PulseTrace,
+            rotation: 0.0,
+            speed: 0.6,
+            density: 1.0,
+            thickness: 1.0,
+            trail: 0.5,
+            color_shift: 0.0,
         }
     }
 }
@@ -170,6 +239,8 @@ impl InteractionState {
                     strength: 1.35,
                     band: ZoneBand::Low,
                     pinned: true,
+                    kind: ZoneVisualKind::SpectrumSkyline,
+                    ..SoundZone::new(Vec2::ZERO)
                 },
                 SoundZone {
                     position: Vec2::new(0.5, 0.76),
@@ -177,6 +248,8 @@ impl InteractionState {
                     strength: 1.2,
                     band: ZoneBand::Mid,
                     pinned: true,
+                    kind: ZoneVisualKind::SpectrogramCity,
+                    ..SoundZone::new(Vec2::ZERO)
                 },
                 SoundZone {
                     position: Vec2::new(0.62, 0.32),
@@ -184,6 +257,8 @@ impl InteractionState {
                     strength: 1.25,
                     band: ZoneBand::High,
                     pinned: true,
+                    kind: ZoneVisualKind::RadialBurst,
+                    ..SoundZone::new(Vec2::ZERO)
                 },
                 SoundZone {
                     position: Vec2::new(0.78, 0.2),
@@ -191,6 +266,8 @@ impl InteractionState {
                     strength: 1.0,
                     band: ZoneBand::Full,
                     pinned: true,
+                    kind: ZoneVisualKind::HaloSpectrum,
+                    ..SoundZone::new(Vec2::ZERO)
                 },
             ],
             selected: Some(3),
@@ -208,7 +285,9 @@ impl InteractionState {
         if self.zones.len() == MAX_SOUND_ZONES {
             return;
         }
-        self.zones.push(SoundZone::new(position));
+        let mut zone = SoundZone::new(position);
+        zone.kind = ZoneVisualKind::ALL[self.zones.len() % ZoneVisualKind::ALL.len()];
+        self.zones.push(zone);
         self.selected = Some(self.zones.len() - 1);
     }
 
@@ -778,6 +857,8 @@ struct VisualizerApp {
     last_preset_watch: Instant,
     auto_reload_presets: bool,
     gpu_state: Option<RenderState>,
+    zone_overlay: Option<GpuPresetRenderer>,
+    zone_overlay_error: Option<String>,
     particle_forge_renderer: Option<ParticleForgeRenderer>,
     particle_forge_error: Option<String>,
     particle_forge: ParticleForgeState,
@@ -813,6 +894,18 @@ impl VisualizerApp {
         let discovery = preset::discover(&preset_directory);
         let mut preset_errors = discovery.errors;
         let gpu_state = creation.wgpu_render_state.clone();
+        let (zone_overlay, zone_overlay_error) = gpu_state.as_ref().map_or_else(
+            || {
+                (
+                    None,
+                    Some("Zone Studio requires a wgpu render state.".to_owned()),
+                )
+            },
+            |state| match GpuPresetRenderer::install_zone_overlay(state) {
+                Ok(renderer) => (Some(renderer), None),
+                Err(error) => (None, Some(error)),
+            },
+        );
         let (particle_forge_renderer, particle_forge_error) = gpu_state.as_ref().map_or_else(
             || {
                 (
@@ -936,6 +1029,8 @@ impl VisualizerApp {
             last_preset_watch: started,
             auto_reload_presets: true,
             gpu_state,
+            zone_overlay,
+            zone_overlay_error,
             particle_forge_renderer,
             particle_forge_error,
             particle_forge: ParticleForgeState::default(),
@@ -1260,6 +1355,13 @@ impl VisualizerApp {
                     strength: zone.strength,
                     band: zone.band.code(),
                     pinned: zone.pinned,
+                    kind: zone.kind.code(),
+                    rotation: zone.rotation,
+                    speed: zone.speed,
+                    density: zone.density,
+                    thickness: zone.thickness,
+                    trail: zone.trail,
+                    color_shift: zone.color_shift,
                 })
                 .collect(),
             parameters: self.mode_parameters,
@@ -1399,6 +1501,13 @@ impl VisualizerApp {
                     strength: zone.strength,
                     band: ZoneBand::from_code(zone.band),
                     pinned: zone.pinned,
+                    kind: ZoneVisualKind::from_code(zone.kind),
+                    rotation: zone.rotation,
+                    speed: zone.speed,
+                    density: zone.density,
+                    thickness: zone.thickness,
+                    trail: zone.trail,
+                    color_shift: zone.color_shift,
                 })
                 .collect(),
             selected: snapshot.selected_zone,
@@ -2081,7 +2190,12 @@ impl VisualizerApp {
                 painter.text(
                     center + Vec2::new(marker_size + 7.0, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    format!("{}  {}", index + 1, zone.band.label()),
+                    format!(
+                        "{}  {} · {}",
+                        index + 1,
+                        zone.kind.label(),
+                        zone.band.label()
+                    ),
                     egui::FontId::monospace(10.0),
                     color.gamma_multiply(0.78),
                 );
@@ -2150,6 +2264,15 @@ impl VisualizerApp {
             };
             state[offset + 5] = if zone.pinned { 1.0 } else { 0.0 };
             state[offset + 6] = zone.band.energy(&self.features);
+            let extension = 96 + index * 8;
+            state[extension] = f32::from(zone.kind.code());
+            state[extension + 1] = zone.rotation;
+            state[extension + 2] = zone.speed;
+            state[extension + 3] = zone.density;
+            state[extension + 4] = zone.thickness;
+            state[extension + 5] = zone.trail;
+            state[extension + 6] = zone.color_shift;
+            state[extension + 7] = 1.0;
         }
         for (index, color) in [
             self.colors.full,
@@ -2209,6 +2332,36 @@ impl VisualizerApp {
             _ if self.performance.live_mix => self.draw_performance_mix(painter, rect),
             _ => self.draw_studio(painter, rect),
         }
+        self.draw_zone_overlay(painter, rect);
+    }
+
+    fn draw_zone_overlay(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(renderer) = &self.zone_overlay else {
+            return;
+        };
+        let scene = self.preset_scene_state();
+        renderer.paint_with_opacity(
+            painter,
+            rect,
+            PresetFrame {
+                time: self.started.elapsed().as_secs_f32(),
+                delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.25),
+                gain: self.gain,
+                waveform: &self.features.waveform,
+                spectrum: &self.features.spectrum,
+                low: self.features.low,
+                mid: self.features.mid,
+                high: self.features.high,
+                rms: self.features.rms,
+                peak: self.features.peak,
+                onset: self.features.onset,
+                transient: self.features.transient,
+                spectrum_history: &self.visual_history.spectra,
+                scene: &scene,
+                parameters: &[],
+            },
+            1.0,
+        );
     }
 
     fn draw_performance_mix(&self, painter: &egui::Painter, rect: Rect) {
@@ -5276,9 +5429,9 @@ impl VisualizerApp {
                             self.forge_panel = true;
                         }
                     });
-                } else {
+                }
                 egui::CollapsingHeader::new(format!(
-                    "Sound Zones · {}/{}",
+                    "Zone Studio · {}/{}",
                     self.interaction.zones.len(),
                     MAX_SOUND_ZONES
                 ))
@@ -5291,10 +5444,11 @@ impl VisualizerApp {
                             if ui
                                 .selectable_label(
                                     self.interaction.selected == Some(index),
-                                    format!("{} {}", index + 1, zone.band.label()),
+                                    format!("{} {}", index + 1, zone.kind.label()),
                                 )
                                 .on_hover_text(format!(
-                                    "{} · radius {:.2} · strength {:.2}{}",
+                                    "{} · {} · radius {:.2} · strength {:.2}{}",
+                                    zone.kind.label(),
                                     zone.band.label(),
                                     zone.radius,
                                     zone.strength,
@@ -5322,7 +5476,11 @@ impl VisualizerApp {
                         if ui.button("Reset zones").clicked() {
                             self.reset_interaction();
                         }
+                        ui.checkbox(&mut self.interaction.show_handles, "Show handles");
                     });
+                    if let Some(error) = &self.zone_overlay_error {
+                        ui.colored_label(Color32::from_rgb(255, 160, 90), error);
+                    }
 
                     let mut remove = false;
                     if let Some(zone) = self
@@ -5332,6 +5490,13 @@ impl VisualizerApp {
                     {
                         ui.separator();
                         ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("instrument-zone-visual")
+                                .selected_text(zone.kind.label())
+                                .show_ui(ui, |ui| {
+                                    for kind in ZoneVisualKind::ALL {
+                                        ui.selectable_value(&mut zone.kind, kind, kind.label());
+                                    }
+                                });
                             egui::ComboBox::from_id_salt("instrument-zone-band")
                                 .selected_text(format!("Band · {}", zone.band.label()))
                                 .show_ui(ui, |ui| {
@@ -5356,6 +5521,39 @@ impl VisualizerApp {
                                 .text("Strength")
                                 .fixed_decimals(2),
                         );
+                        ui.add(
+                            egui::Slider::new(
+                                &mut zone.rotation,
+                                -std::f32::consts::TAU..=std::f32::consts::TAU,
+                            )
+                            .text("Rotation")
+                            .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut zone.speed, -3.0..=3.0)
+                                .text("Speed")
+                                .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut zone.density, 0.25..=3.0)
+                                .text("Density")
+                                .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut zone.thickness, 0.25..=3.0)
+                                .text("Thickness")
+                                .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut zone.trail, 0.0..=1.0)
+                                .text("Trails")
+                                .fixed_decimals(2),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut zone.color_shift, -1.0..=1.0)
+                                .text("Color shift")
+                                .fixed_decimals(2),
+                        );
                         remove = ui
                             .add_enabled(!zone.pinned, egui::Button::new("Remove selected"))
                             .clicked();
@@ -5366,7 +5564,6 @@ impl VisualizerApp {
                         self.interaction.remove_selected();
                     }
                 });
-                }
 
                 egui::CollapsingHeader::new("Colors & Materials")
                     .id_salt("instrument-colors")
@@ -6220,9 +6417,10 @@ mod tests {
     use super::{
         ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
-        VisualHistory, ZoneBand, callback_is_new, cargo_resource_directory, default_needs_recovery,
-        instrument_profile, lerp_color, living_photo_plant_mask, pacing_delay, rare_bird_progress,
-        shift_color, shifted_frequency, status_hint, visual_index_for_key,
+        VisualHistory, ZoneBand, ZoneVisualKind, callback_is_new, cargo_resource_directory,
+        default_needs_recovery, instrument_profile, lerp_color, living_photo_plant_mask,
+        pacing_delay, rare_bird_progress, shift_color, shifted_frequency, status_hint,
+        visual_index_for_key,
     };
     use eframe::egui::Pos2;
     use std::time::{Duration, Instant};
@@ -6284,6 +6482,17 @@ mod tests {
             interaction.add_zone(eframe::egui::Vec2::new(0.25, 0.75));
         }
         assert_eq!(interaction.zones.len(), MAX_SOUND_ZONES);
+        assert_eq!(
+            interaction.zones[1..]
+                .iter()
+                .map(|zone| zone.kind)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            MAX_SOUND_ZONES - 1
+        );
+        for kind in ZoneVisualKind::ALL {
+            assert_eq!(ZoneVisualKind::from_code(kind.code()), kind);
+        }
 
         interaction.selected = Some(0);
         interaction.zones[0].pinned = true;

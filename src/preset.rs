@@ -376,6 +376,15 @@ mod tests {
                 preset.name
             );
         }
+        let error_scope = device.push_error_scope(eframe::wgpu::ErrorFilter::Validation);
+        let _ = device.create_shader_module(eframe::wgpu::ShaderModuleDescriptor {
+            label: Some("Zone Studio"),
+            source: eframe::wgpu::ShaderSource::Wgsl(include_str!("zone_overlay.wgsl").into()),
+        });
+        assert!(
+            pollster::block_on(error_scope.pop()).is_none(),
+            "Zone Studio failed WGSL validation"
+        );
     }
 
     #[test]

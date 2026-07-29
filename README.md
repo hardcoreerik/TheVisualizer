@@ -19,7 +19,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
 - Automatic default-output recovery timing from detection through stream open and first capture packet
 - Twenty-eight bundled visuals: Neon Scope, Particle Forge, Studio, seventeen original WGSL presets, and eight licensed ISF adaptations grouped under `Imported · ISF`
-- Up to eight shared sound zones plus sixteen Particle Forge 3D force nodes with independent band routing, Emit/Attract/Repel/Spin/Vortex behavior, radius, strength, falloff, axis, depth, and pin state
+- Zone Studio turns each of up to eight shared zones into an independently placed GPU visual: Pulse Trace, Spectrum Skyline, Radial Burst, Spectrogram City, Spectral Terrain, Wave Tunnel, Particle Ocean, Wireframe Terrain, Halo Spectrum, or Atomic Orbits. Each exposes band, scale, strength, rotation, speed, density, thickness, trails, and color shift.
 - A mode-aware `Instrument [I]` panel with a unique identity, accent, interaction guide, and inline control families for every visual; `Mode [O]` detaches the same active controls, `Forge [F]` inspects the selected 3D force node, and `Performance [P]` owns GPU A/B mixing
 - A searchable, categorized `Visual Library [L]` with session favorites; `H` independently hides visual labels
 - GPU-native Particle Forge compute simulation with 65,536–262,144 XYZ particles, toroidal motion, five topology families, three blendable material treatments, audio modulation routes, fixed quality profiles, and bounded `.glb` mesh attachment

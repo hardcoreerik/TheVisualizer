@@ -19,7 +19,7 @@ const AUDIO_FEATURE_FLOATS: usize = WAVEFORM_POINTS + SPECTRUM_BANDS;
 const FRAME_EXTRAS_FLOATS: usize = 8;
 pub const PRESET_HISTORY_ROWS: usize = 128;
 const PRESET_HISTORY_FLOATS: usize = PRESET_HISTORY_ROWS * SPECTRUM_BANDS;
-pub const PRESET_SCENE_FLOATS: usize = 96;
+pub const PRESET_SCENE_FLOATS: usize = 160;
 pub const PRESET_PARAMETER_FLOATS: usize = 40;
 static NEXT_RENDERER_KEY: AtomicU64 = AtomicU64::new(1);
 
@@ -119,7 +119,23 @@ pub struct GpuPresetRenderer {
 
 impl GpuPresetRenderer {
     pub fn install(state: &egui_wgpu::RenderState, preset: &Preset) -> Result<Self, String> {
-        let resources = create_resources(state, preset)?;
+        let resources = create_resources(
+            state,
+            &preset.name,
+            &preset.shader,
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Constant,
+                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Constant,
+                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+        )?;
         let resource_key = NEXT_RENDERER_KEY.fetch_add(1, Ordering::Relaxed);
         insert_resources(state, resource_key, resources);
         Ok(Self {
@@ -130,8 +146,41 @@ impl GpuPresetRenderer {
         })
     }
 
+    pub fn install_zone_overlay(state: &egui_wgpu::RenderState) -> Result<Self, String> {
+        let resources = create_resources(
+            state,
+            "Zone Studio",
+            include_str!("zone_overlay.wgsl"),
+            wgpu::BlendState::ALPHA_BLENDING,
+        )?;
+        let resource_key = NEXT_RENDERER_KEY.fetch_add(1, Ordering::Relaxed);
+        insert_resources(state, resource_key, resources);
+        Ok(Self {
+            adapter_name: state.adapter.get_info().name,
+            state: state.clone(),
+            active_id: "host.zone-studio".to_owned(),
+            resource_key,
+        })
+    }
+
     pub fn load(&mut self, preset: &Preset) -> Result<(), String> {
-        let resources = create_resources(&self.state, preset)?;
+        let resources = create_resources(
+            &self.state,
+            &preset.name,
+            &preset.shader,
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Constant,
+                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Constant,
+                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+        )?;
         insert_resources(&self.state, self.resource_key, resources);
         self.active_id.clone_from(&preset.id);
         Ok(())
@@ -181,13 +230,15 @@ fn insert_resources(state: &egui_wgpu::RenderState, key: u64, resources: PresetR
 
 fn create_resources(
     state: &egui_wgpu::RenderState,
-    preset: &Preset,
+    label: &str,
+    shader_source: &str,
+    blend: wgpu::BlendState,
 ) -> Result<PresetResources, String> {
     let device = &state.device;
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(&preset.name),
-        source: wgpu::ShaderSource::Wgsl(preset.shader.as_str().into()),
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("TheVisualizer preset uniforms"),
@@ -270,7 +321,7 @@ fn create_resources(
         immediate_size: 0,
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(&preset.name),
+        label: Some(label),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -283,18 +334,7 @@ fn create_resources(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: state.target_format,
-                blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Constant,
-                        dst_factor: wgpu::BlendFactor::OneMinusConstant,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Constant,
-                        dst_factor: wgpu::BlendFactor::OneMinusConstant,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -366,10 +406,9 @@ fn create_resources(
         ],
     });
     if let Some(error) = pollster::block_on(error_scope.pop()) {
-        eprintln!("Preset {:?} was rejected:\n{error}", preset.path);
+        eprintln!("{label} was rejected:\n{error}");
         return Err(format!(
-            "{} rejected: {}",
-            preset.name,
+            "{label} rejected: {}",
             concise_validation_error(&error.to_string())
         ));
     }

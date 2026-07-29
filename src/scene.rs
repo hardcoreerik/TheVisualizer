@@ -18,6 +18,13 @@ pub struct SceneZone {
     pub strength: f32,
     pub band: u8,
     pub pinned: bool,
+    pub kind: u8,
+    pub rotation: f32,
+    pub speed: f32,
+    pub density: f32,
+    pub thickness: f32,
+    pub trail: f32,
+    pub color_shift: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,7 +166,7 @@ fn encode(snapshot: &SceneSnapshot) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let mut source = format!(
-        "format=4\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
+        "format=5\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
          palette={}\nfinish={}\ncolors={colors}\nmaterial={},{},{}\n\
          color_motion={},{}\ncamera={},{},{}\nshow_handles={}\nselected_zone={}\nparameters={parameters}\n",
         snapshot.saved_at_ms,
@@ -182,13 +189,20 @@ fn encode(snapshot: &SceneSnapshot) -> String {
     );
     for zone in &snapshot.zones {
         source.push_str(&format!(
-            "zone={},{},{},{},{},{}\n",
+            "zone={},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             zone.x,
             zone.y,
             zone.radius,
             zone.strength,
             zone.band,
-            u8::from(zone.pinned)
+            u8::from(zone.pinned),
+            zone.kind,
+            zone.rotation,
+            zone.speed,
+            zone.density,
+            zone.thickness,
+            zone.trail,
+            zone.color_shift
         ));
     }
     if let Some(forge_state) = &snapshot.forge_state {
@@ -259,8 +273,8 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
                     return Err(format!("scene exceeds {SCENE_ZONE_LIMIT} zones"));
                 }
                 let values = value.split(',').collect::<Vec<_>>();
-                if values.len() != 6 {
-                    return Err("zone must contain six values".to_owned());
+                if !matches!(values.len(), 6 | 13) {
+                    return Err("zone must contain six or thirteen values".to_owned());
                 }
                 zones.push(SceneZone {
                     x: parse(values[0], "zone x")?,
@@ -269,12 +283,33 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
                     strength: parse(values[3], "zone strength")?,
                     band: parse(values[4], "zone band")?,
                     pinned: parse_bool(values[5], "zone pinned")?,
+                    kind: values
+                        .get(6)
+                        .map_or(Ok(0), |value| parse(value, "zone visual kind"))?,
+                    rotation: values
+                        .get(7)
+                        .map_or(Ok(0.0), |value| parse(value, "zone rotation"))?,
+                    speed: values
+                        .get(8)
+                        .map_or(Ok(0.6), |value| parse(value, "zone speed"))?,
+                    density: values
+                        .get(9)
+                        .map_or(Ok(1.0), |value| parse(value, "zone density"))?,
+                    thickness: values
+                        .get(10)
+                        .map_or(Ok(1.0), |value| parse(value, "zone thickness"))?,
+                    trail: values
+                        .get(11)
+                        .map_or(Ok(0.5), |value| parse(value, "zone trail"))?,
+                    color_shift: values
+                        .get(12)
+                        .map_or(Ok(0.0), |value| parse(value, "zone color shift"))?,
                 });
             }
             _ => return Err(format!("unknown scene key `{key}`")),
         }
     }
-    if !matches!(format, Some(1..=4)) {
+    if !matches!(format, Some(1..=5)) {
         return Err("unsupported or missing scene format".to_owned());
     }
     let material = material.ok_or_else(|| "missing `material`".to_owned())?;
@@ -351,6 +386,20 @@ fn validate(snapshot: &SceneSnapshot) -> Result<(), String> {
         if zone.band > 3 {
             return Err("zone band is out of range".to_owned());
         }
+        if zone.kind > 9 {
+            return Err("zone visual kind is out of range".to_owned());
+        }
+        finite_range(
+            zone.rotation,
+            -std::f32::consts::TAU,
+            std::f32::consts::TAU,
+            "zone rotation",
+        )?;
+        finite_range(zone.speed, -3.0, 3.0, "zone speed")?;
+        finite_range(zone.density, 0.25, 3.0, "zone density")?;
+        finite_range(zone.thickness, 0.25, 3.0, "zone thickness")?;
+        finite_range(zone.trail, 0.0, 1.0, "zone trail")?;
+        finite_range(zone.color_shift, -1.0, 1.0, "zone color shift")?;
     }
     if snapshot.parameters.iter().any(|value| !value.is_finite()) {
         return Err("scene parameters must be finite".to_owned());
@@ -490,6 +539,13 @@ mod tests {
                 strength: 1.35,
                 band: 1,
                 pinned: true,
+                kind: 3,
+                rotation: 0.3,
+                speed: 1.2,
+                density: 1.4,
+                thickness: 0.8,
+                trail: 0.7,
+                color_shift: 0.2,
             }],
             parameters: [0.5; SCENE_PARAMETER_COUNT],
             forge_state: None,
@@ -528,9 +584,20 @@ mod tests {
     #[test]
     fn format_one_scene_migrates_without_forge_state() {
         let legacy = encode(&snapshot())
-            .replacen("format=4", "format=1", 1)
+            .replacen("format=5", "format=1", 1)
             .lines()
             .filter(|line| !line.starts_with("color_motion="))
+            .map(|line| {
+                line.strip_prefix("zone=").map_or_else(
+                    || line.to_owned(),
+                    |zone| {
+                        format!(
+                            "zone={}",
+                            zone.split(',').take(6).collect::<Vec<_>>().join(",")
+                        )
+                    },
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let restored = decode(&legacy).expect("decode legacy scene");
