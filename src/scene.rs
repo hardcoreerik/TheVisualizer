@@ -33,6 +33,7 @@ pub struct SceneSnapshot {
     pub glow: f32,
     pub gloss: f32,
     pub saturation: f32,
+    pub color_motion: [f32; 2],
     pub camera_yaw: f32,
     pub camera_pitch: f32,
     pub camera_zoom: f32,
@@ -158,9 +159,9 @@ fn encode(snapshot: &SceneSnapshot) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let mut source = format!(
-        "format=3\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
+        "format=4\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
          palette={}\nfinish={}\ncolors={colors}\nmaterial={},{},{}\n\
-         camera={},{},{}\nshow_handles={}\nselected_zone={}\nparameters={parameters}\n",
+         color_motion={},{}\ncamera={},{},{}\nshow_handles={}\nselected_zone={}\nparameters={parameters}\n",
         snapshot.saved_at_ms,
         hex_encode(&snapshot.name),
         hex_encode(&snapshot.mode_id),
@@ -171,6 +172,8 @@ fn encode(snapshot: &SceneSnapshot) -> String {
         snapshot.glow,
         snapshot.gloss,
         snapshot.saturation,
+        snapshot.color_motion[0],
+        snapshot.color_motion[1],
         snapshot.camera_yaw,
         snapshot.camera_pitch,
         snapshot.camera_zoom,
@@ -211,6 +214,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
     let mut finish = None;
     let mut colors = None;
     let mut material = None;
+    let mut color_motion = None;
     let mut camera = None;
     let mut show_handles = None;
     let mut selected_zone = None;
@@ -233,6 +237,9 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
             "finish" => set_once(&mut finish, parse(value, key)?, key)?,
             "colors" => set_once(&mut colors, parse_colors(value)?, key)?,
             "material" => set_once(&mut material, parse_floats::<3>(value, key)?, key)?,
+            "color_motion" => {
+                set_once(&mut color_motion, parse_floats::<2>(value, key)?, key)?;
+            }
             "camera" => set_once(&mut camera, parse_floats::<3>(value, key)?, key)?,
             "show_handles" => set_once(&mut show_handles, parse_bool(value, key)?, key)?,
             "selected_zone" => set_once(&mut selected_zone, parse(value, key)?, key)?,
@@ -267,7 +274,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
             _ => return Err(format!("unknown scene key `{key}`")),
         }
     }
-    if !matches!(format, Some(1..=3)) {
+    if !matches!(format, Some(1..=4)) {
         return Err("unsupported or missing scene format".to_owned());
     }
     let material = material.ok_or_else(|| "missing `material`".to_owned())?;
@@ -285,6 +292,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
         glow: material[0],
         gloss: material[1],
         saturation: material[2],
+        color_motion: color_motion.unwrap_or([0.0, 0.0]),
         camera_yaw: camera[0],
         camera_pitch: camera[1],
         camera_zoom: camera[2],
@@ -316,6 +324,8 @@ fn validate(snapshot: &SceneSnapshot) -> Result<(), String> {
     finite_range(snapshot.glow, 0.0, 2.0, "glow")?;
     finite_range(snapshot.gloss, 0.0, 1.0, "gloss")?;
     finite_range(snapshot.saturation, 0.0, 1.5, "saturation")?;
+    finite_range(snapshot.color_motion[0], -1.0, 1.0, "hue shift")?;
+    finite_range(snapshot.color_motion[1], -2.0, 2.0, "phase speed")?;
     finite_range(
         snapshot.camera_yaw,
         -std::f32::consts::TAU,
@@ -467,6 +477,7 @@ mod tests {
             glow: 1.2,
             gloss: 0.7,
             saturation: 1.0,
+            color_motion: [0.0, 0.0],
             camera_yaw: 0.4,
             camera_pitch: 0.1,
             camera_zoom: 1.3,
@@ -516,7 +527,12 @@ mod tests {
 
     #[test]
     fn format_one_scene_migrates_without_forge_state() {
-        let legacy = encode(&snapshot()).replacen("format=3", "format=1", 1);
+        let legacy = encode(&snapshot())
+            .replacen("format=4", "format=1", 1)
+            .lines()
+            .filter(|line| !line.starts_with("color_motion="))
+            .collect::<Vec<_>>()
+            .join("\n");
         let restored = decode(&legacy).expect("decode legacy scene");
         assert!(restored.forge_state.is_none());
     }

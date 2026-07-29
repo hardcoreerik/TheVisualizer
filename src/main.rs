@@ -318,6 +318,8 @@ struct ColorSystem {
     glow: f32,
     gloss: f32,
     saturation: f32,
+    hue_shift: f32,
+    phase_speed: f32,
 }
 
 impl Default for ColorSystem {
@@ -333,6 +335,8 @@ impl Default for ColorSystem {
             glow: 1.0,
             gloss: 0.7,
             saturation: 1.0,
+            hue_shift: 0.0,
+            phase_speed: 0.0,
         };
         colors.apply_palette(PalettePreset::CyberNeon);
         colors
@@ -397,25 +401,35 @@ impl ColorSystem {
         [self.full, self.bass, self.mid, self.treble, self.background] = colors;
     }
 
-    fn band_color(&self, band: ZoneBand) -> Color32 {
-        match band {
-            ZoneBand::Full => self.full,
-            ZoneBand::Low => self.bass,
-            ZoneBand::Mid => self.mid,
-            ZoneBand::High => self.treble,
-        }
+    fn phase(&self, time: f32) -> f32 {
+        (self.hue_shift + time * self.phase_speed * 0.05).rem_euclid(1.0)
     }
 
-    fn spectrum_color(&self, frequency: f32) -> Color32 {
+    fn band_color(&self, band: ZoneBand, time: f32) -> Color32 {
+        shift_color(
+            match band {
+                ZoneBand::Full => self.full,
+                ZoneBand::Low => self.bass,
+                ZoneBand::Mid => self.mid,
+                ZoneBand::High => self.treble,
+            },
+            self.phase(time),
+        )
+    }
+
+    fn spectrum_color(&self, frequency: f32, time: f32) -> Color32 {
         let (from, to, amount) = if frequency < 0.55 {
             (self.bass, self.mid, frequency / 0.55)
         } else {
             (self.mid, self.treble, (frequency - 0.55) / 0.45)
         };
-        Color32::from_rgb(
-            egui::lerp(from.r() as f32..=to.r() as f32, amount) as u8,
-            egui::lerp(from.g() as f32..=to.g() as f32, amount) as u8,
-            egui::lerp(from.b() as f32..=to.b() as f32, amount) as u8,
+        shift_color(
+            Color32::from_rgb(
+                egui::lerp(from.r() as f32..=to.r() as f32, amount) as u8,
+                egui::lerp(from.g() as f32..=to.g() as f32, amount) as u8,
+                egui::lerp(from.b() as f32..=to.b() as f32, amount) as u8,
+            ),
+            self.phase(time),
         )
     }
 }
@@ -1229,6 +1243,7 @@ impl VisualizerApp {
             glow: self.colors.glow,
             gloss: self.colors.gloss,
             saturation: self.colors.saturation,
+            color_motion: [self.colors.hue_shift, self.colors.phase_speed],
             camera_yaw: self.interaction.camera_yaw,
             camera_pitch: self.interaction.camera_pitch,
             camera_zoom: self.interaction.camera_zoom,
@@ -1358,6 +1373,7 @@ impl VisualizerApp {
         self.colors.glow = snapshot.glow;
         self.colors.gloss = snapshot.gloss;
         self.colors.saturation = snapshot.saturation;
+        [self.colors.hue_shift, self.colors.phase_speed] = snapshot.color_motion;
         self.mode_parameters = snapshot.parameters;
         if self.visual == 2
             && let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
@@ -1642,7 +1658,7 @@ impl VisualizerApp {
         if mode_panel {
             self.mode_panel = !self.mode_panel;
         }
-        if forge && self.visual == 1 {
+        if forge {
             self.forge_panel = !self.forge_panel;
         }
         if performance {
@@ -2014,11 +2030,12 @@ impl VisualizerApp {
             return;
         }
         let scale = rect.size().min_elem();
+        let time = self.started.elapsed().as_secs_f32();
         for (index, zone) in self.interaction.zones.iter().enumerate() {
             let center = visual_position(rect, zone.position);
             let energy = zone.band.energy(&self.features) * zone.strength;
             let radius = (zone.radius * scale * (1.0 + energy * 0.16)).max(24.0);
-            let color = self.colors.band_color(zone.band);
+            let color = self.colors.band_color(zone.band, time);
             let selected = self.interaction.selected == Some(index);
             let finish_alpha = match self.colors.finish {
                 SurfaceFinish::Neon => 1.0,
@@ -2076,10 +2093,11 @@ impl VisualizerApp {
         if !self.interaction.show_handles {
             return;
         }
+        let time = self.started.elapsed().as_secs_f32();
         for (index, node) in self.particle_forge.nodes.iter().enumerate() {
             let center = forge_node_position(rect, node.position);
             let selected = self.particle_forge.selected == Some(index);
-            let color = self.colors.band_color(ZoneBand::from_code(node.band));
+            let color = self.colors.band_color(ZoneBand::from_code(node.band), time);
             let radius = (node.radius * 42.0).max(12.0);
             painter.circle_stroke(
                 center,
@@ -2159,6 +2177,10 @@ impl VisualizerApp {
             SurfaceFinish::Metallic => 3.0,
             SurfaceFinish::Glass => 4.0,
         };
+        shift_scene_hue(
+            &mut state,
+            self.colors.phase(self.started.elapsed().as_secs_f32()),
+        );
         state
     }
 
@@ -2266,7 +2288,10 @@ impl VisualizerApp {
             self.draw_particles_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0);
             return;
         };
+        let time = self.started.elapsed().as_secs_f32();
+        let color_phase = self.colors.phase(time);
         let mut forge = self.particle_forge.clone();
+        forge.gradient_shift = (forge.gradient_shift + color_phase).rem_euclid(1.0);
         forge.apply_modulation([
             self.features.low,
             self.features.mid,
@@ -2279,7 +2304,7 @@ impl VisualizerApp {
             painter,
             rect,
             ForgeFrame {
-                time: self.started.elapsed().as_secs_f32(),
+                time,
                 delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.05),
                 gain: self.gain,
                 low: self.features.low,
@@ -2290,9 +2315,9 @@ impl VisualizerApp {
                 transient: self.features.transient,
                 state: &forge,
                 colors: [
-                    self.colors.bass.to_normalized_gamma_f32(),
-                    self.colors.mid.to_normalized_gamma_f32(),
-                    self.colors.treble.to_normalized_gamma_f32(),
+                    shift_color(self.colors.bass, color_phase).to_normalized_gamma_f32(),
+                    shift_color(self.colors.mid, color_phase).to_normalized_gamma_f32(),
+                    shift_color(self.colors.treble, color_phase).to_normalized_gamma_f32(),
                 ],
             },
         );
@@ -2787,6 +2812,7 @@ impl VisualizerApp {
             ),
         );
 
+        let time = self.started.elapsed().as_secs_f32();
         let amplitude = rect.height() * 0.32 * self.gain * drive;
         let history = if self.visual_history.waveforms.is_empty() {
             vec![self.features.waveform.as_slice()]
@@ -2801,7 +2827,7 @@ impl VisualizerApp {
             let age = (trail + 1) as f32 / history.len() as f32;
             let points = waveform_points(waveform, rect, center.y, amplitude);
             let color = Self::studio_color(
-                self.colors.spectrum_color(age),
+                self.colors.spectrum_color(age, time),
                 opacity * (0.12 + age * 0.5),
                 blend,
             );
@@ -2907,10 +2933,10 @@ impl VisualizerApp {
                 let radius = scale * (0.15 + frequency.powf(0.72) * 0.27 + value * 0.31);
                 let point = center + Vec2::new(angle.cos() * radius, angle.sin() * radius * 0.78);
                 let color = Self::studio_color(
-                    self.colors.spectrum_color(shifted_frequency(
-                        frequency,
-                        self.particle_forge.gradient_shift,
-                    )),
+                    self.colors.spectrum_color(
+                        shifted_frequency(frequency, self.particle_forge.gradient_shift),
+                        time,
+                    ),
                     opacity * (0.12 + age * 0.7),
                     blend,
                 );
@@ -3229,11 +3255,19 @@ impl VisualizerApp {
                             {
                                 self.mode_panel = !self.mode_panel;
                             }
-                            if self.visual == 1
-                                && ui
-                                    .selectable_label(self.forge_panel, "Forge [F]")
-                                    .on_hover_text("Inspect the selected 3D force node.")
-                                    .clicked()
+                            let focus_label = if self.visual == 1 {
+                                "Forge [F]"
+                            } else {
+                                "Color [F]"
+                            };
+                            if ui
+                                .selectable_label(self.forge_panel, focus_label)
+                                .on_hover_text(if self.visual == 1 {
+                                    "Inspect the selected 3D force node."
+                                } else {
+                                    "Open focused color shift and phase controls."
+                                })
+                                .clicked()
                             {
                                 self.forge_panel = !self.forge_panel;
                             }
@@ -4414,6 +4448,70 @@ impl VisualizerApp {
         self.forge_panel = open;
     }
 
+    fn draw_color_motion_controls(&mut self, ui: &mut egui::Ui) {
+        let mut palette = self.colors.palette;
+        egui::ComboBox::from_id_salt("color-motion-palette")
+            .selected_text(palette.label())
+            .show_ui(ui, |ui| {
+                for candidate in PalettePreset::ALL {
+                    ui.selectable_value(&mut palette, candidate, candidate.label());
+                }
+            });
+        if palette != self.colors.palette {
+            self.colors.apply_palette(palette);
+        }
+        gradient_value_control(
+            ui,
+            "Hue shift",
+            &mut self.colors.hue_shift,
+            -1.0,
+            1.0,
+            self.colors.bass,
+            self.colors.treble,
+        );
+        gradient_value_control(
+            ui,
+            "Phase speed",
+            &mut self.colors.phase_speed,
+            -2.0,
+            2.0,
+            self.colors.mid,
+            self.colors.full,
+        );
+        ui.horizontal(|ui| {
+            if ui.button("Stop").clicked() {
+                self.colors.phase_speed = 0.0;
+            }
+            if ui.button("Reverse").clicked() {
+                self.colors.phase_speed = -self.colors.phase_speed;
+            }
+            if ui.button("Reset").clicked() {
+                self.colors.hue_shift = 0.0;
+                self.colors.phase_speed = 0.0;
+            }
+        });
+        ui.label(
+            egui::RichText::new("Speed 1.0 = one color cycle every 20 seconds")
+                .small()
+                .color(Color32::from_rgb(145, 170, 190)),
+        );
+    }
+
+    fn draw_color_focus_panel(&mut self, ctx: &egui::Context) {
+        let mut open = self.forge_panel;
+        egui::Window::new("COLOR FOCUS")
+            .id(egui::Id::new("color-focus-panel"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [20.0, -20.0])
+            .default_width(360.0)
+            .resizable(true)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("Global color motion · F closes");
+                self.draw_color_motion_controls(ui);
+            });
+        self.forge_panel = open;
+    }
+
     fn draw_visual_library(&mut self, ctx: &egui::Context) {
         let mut open = self.visual_library_panel;
         egui::Window::new("VISUAL LIBRARY")
@@ -4687,6 +4785,16 @@ impl VisualizerApp {
                     }
                     if ui.button("Mode controls [O]").clicked() {
                         self.mode_panel = true;
+                    }
+                    if ui
+                        .button(if self.visual == 1 {
+                            "Forge [F]"
+                        } else {
+                            "Color [F]"
+                        })
+                        .clicked()
+                    {
+                        self.forge_panel = true;
                     }
                     if ui.button("Performance [P]").clicked() {
                         self.performance_panel = true;
@@ -5263,17 +5371,7 @@ impl VisualizerApp {
                 egui::CollapsingHeader::new("Colors & Materials")
                     .id_salt("instrument-colors")
                     .show(ui, |ui| {
-                        let mut palette = self.colors.palette;
-                        egui::ComboBox::from_id_salt("instrument-palette")
-                            .selected_text(palette.label())
-                            .show_ui(ui, |ui| {
-                                for candidate in PalettePreset::ALL {
-                                    ui.selectable_value(&mut palette, candidate, candidate.label());
-                                }
-                            });
-                        if palette != self.colors.palette {
-                            self.colors.apply_palette(palette);
-                        }
+                        self.draw_color_motion_controls(ui);
                         egui::ComboBox::from_id_salt("instrument-finish")
                             .selected_text(self.colors.finish.label())
                             .show_ui(ui, |ui| {
@@ -5618,8 +5716,12 @@ impl eframe::App for VisualizerApp {
         if self.mode_panel {
             self.draw_mode_panel(ui.ctx());
         }
-        if self.forge_panel && self.visual == 1 {
-            self.draw_forge_panel(ui.ctx());
+        if self.forge_panel {
+            if self.visual == 1 {
+                self.draw_forge_panel(ui.ctx());
+            } else {
+                self.draw_color_focus_panel(ui.ctx());
+            }
         }
         if self.performance_panel {
             self.draw_performance_panel(ui.ctx());
@@ -5672,31 +5774,51 @@ fn shifted_frequency(frequency: f32, shift: f32) -> f32 {
 }
 
 fn shift_scene_hue(scene: &mut [f32; PRESET_SCENE_FLOATS], shift: f32) {
-    let phase = shift.rem_euclid(1.0) * 3.0;
     for offset in (72..92).step_by(4) {
-        let color = [scene[offset], scene[offset + 1], scene[offset + 2]];
-        let rotated = if phase < 1.0 {
-            [
-                egui::lerp(color[0]..=color[1], phase),
-                egui::lerp(color[1]..=color[2], phase),
-                egui::lerp(color[2]..=color[0], phase),
-            ]
-        } else if phase < 2.0 {
-            let phase = phase - 1.0;
-            [
-                egui::lerp(color[1]..=color[2], phase),
-                egui::lerp(color[2]..=color[0], phase),
-                egui::lerp(color[0]..=color[1], phase),
-            ]
-        } else {
-            let phase = phase - 2.0;
-            [
-                egui::lerp(color[2]..=color[0], phase),
-                egui::lerp(color[0]..=color[1], phase),
-                egui::lerp(color[1]..=color[2], phase),
-            ]
-        };
+        let rotated = shift_rgb([scene[offset], scene[offset + 1], scene[offset + 2]], shift);
         scene[offset..offset + 3].copy_from_slice(&rotated);
+    }
+}
+
+fn shift_color(color: Color32, shift: f32) -> Color32 {
+    let shifted = shift_rgb(
+        [
+            f32::from(color.r()) / 255.0,
+            f32::from(color.g()) / 255.0,
+            f32::from(color.b()) / 255.0,
+        ],
+        shift,
+    );
+    Color32::from_rgba_unmultiplied(
+        (shifted[0] * 255.0) as u8,
+        (shifted[1] * 255.0) as u8,
+        (shifted[2] * 255.0) as u8,
+        color.a(),
+    )
+}
+
+fn shift_rgb(color: [f32; 3], shift: f32) -> [f32; 3] {
+    let phase = shift.rem_euclid(1.0) * 3.0;
+    if phase < 1.0 {
+        [
+            egui::lerp(color[0]..=color[1], phase),
+            egui::lerp(color[1]..=color[2], phase),
+            egui::lerp(color[2]..=color[0], phase),
+        ]
+    } else if phase < 2.0 {
+        let phase = phase - 1.0;
+        [
+            egui::lerp(color[1]..=color[2], phase),
+            egui::lerp(color[2]..=color[0], phase),
+            egui::lerp(color[0]..=color[1], phase),
+        ]
+    } else {
+        let phase = phase - 2.0;
+        [
+            egui::lerp(color[2]..=color[0], phase),
+            egui::lerp(color[0]..=color[1], phase),
+            egui::lerp(color[1]..=color[2], phase),
+        ]
     }
 }
 
@@ -6100,7 +6222,7 @@ mod tests {
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
         VisualHistory, ZoneBand, callback_is_new, cargo_resource_directory, default_needs_recovery,
         instrument_profile, lerp_color, living_photo_plant_mask, pacing_delay, rare_bird_progress,
-        shifted_frequency, status_hint, visual_index_for_key,
+        shift_color, shifted_frequency, status_hint, visual_index_for_key,
     };
     use eframe::egui::Pos2;
     use std::time::{Duration, Instant};
@@ -6186,6 +6308,14 @@ mod tests {
     #[test]
     fn particle_gradient_shift_wraps_around() {
         assert!((shifted_frequency(0.8, 0.35) - 0.15).abs() < f32::EPSILON * 4.0);
+    }
+
+    #[test]
+    fn color_shift_wraps_and_rotates_channels() {
+        let red = eframe::egui::Color32::RED;
+        assert_eq!(shift_color(red, 0.0), red);
+        assert_eq!(shift_color(red, 1.0), red);
+        assert_eq!(shift_color(red, 1.0 / 3.0), eframe::egui::Color32::BLUE);
     }
 
     #[test]
