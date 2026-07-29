@@ -61,9 +61,9 @@ The scene is procedural. It does not currently use downloaded city photography, 
 
 ## Studio prototype
 
-The development tree adds an unvalidated fourth visual, `Studio · Living Photograph`. It composites a bounded stack of up to eight host-painted Image, Waveform, and Particles layers. Each layer can be hidden, reordered, removed, scaled, assigned Full/Bass/Mid/Treble routing, and given bounded opacity and reactivity. Waveform and particle layers offer Normal or Add blending. The image layer uses Normal blending and accepts local PNG, JPEG, or WebP files by native desktop drag and drop.
+The development tree adds a fourth visual, `Studio · Living Photograph`. It composites a bounded stack of up to eight Image, GPU Preset, Waveform, and Particles layers. Each layer can be hidden, removed, scaled, assigned Full/Bass/Mid/Treble routing, and given bounded reactivity. Image and host-painted layers can be reordered and expose opacity where supported; waveform and particle layers offer Normal or Add blending. One opaque GPU-preset base stays below the other layers and can switch among all discovered presets. The image layer uses Normal blending and accepts local PNG, JPEG, or WebP files by native desktop drag and drop.
 
-The first composition bundles one original photorealistic rainy-greenhouse image. Audio applies restrained exposure and crop movement to that image while the existing waveform and particle instruments render above it. The decoder rejects files over 64 MiB, images over 8192 pixels on either edge, and decoding allocations over 256 MiB. Studio composition persistence, GPU-preset layers, offscreen effects, and image generation inside the player are not implemented.
+The first composition bundles one original photorealistic rainy-greenhouse image. Audio applies restrained exposure and crop movement to that image while the existing waveform and particle instruments render above it. Lower image opacity reveals the optional GPU-preset base. The decoder rejects files over 64 MiB, images over 8192 pixels on either edge, and decoding allocations over 256 MiB. Studio composition persistence, offscreen effects, and image generation inside the player are not implemented.
 
 ### Ten next studio modes
 

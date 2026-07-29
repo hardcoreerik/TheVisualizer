@@ -1061,10 +1061,7 @@ impl VisualizerApp {
                     .ok_or_else(|| "The active preset is no longer available.".to_owned())?;
                 Ok((preset.id.clone(), preset.name.clone()))
             }
-            _ => Err(
-                "Studio composition saving is not implemented in this first rendering slice."
-                    .to_owned(),
-            ),
+            _ => Err("Studio compositions are session-only in this prototype.".to_owned()),
         }
     }
 
@@ -1861,48 +1858,51 @@ impl VisualizerApp {
         match self.visual {
             0 => self.draw_scope_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
             1 => self.draw_particles_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
-            2 => {
-                if let Some(renderer) = &self.gpu_preset {
-                    let scene = self.preset_scene_state();
-                    let mut parameters = self.mode_parameters;
-                    let response_index = self
-                        .presets
-                        .iter()
-                        .find(|preset| preset.id == renderer.active_id())
-                        .and_then(|preset| {
-                            preset
-                                .parameters
-                                .iter()
-                                .position(|parameter| parameter.id == "response")
-                        })
-                        .unwrap_or(0);
-                    parameters[response_index] = self.gain * self.plugin_multiplier;
-                    renderer.paint(
-                        painter,
-                        rect,
-                        PresetFrame {
-                            time: self.started.elapsed().as_secs_f32(),
-                            delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.25),
-                            gain: self.gain * self.plugin_multiplier,
-                            waveform: &self.features.waveform,
-                            spectrum: &self.features.spectrum,
-                            low: self.features.low,
-                            mid: self.features.mid,
-                            high: self.features.high,
-                            rms: self.features.rms,
-                            peak: self.features.peak,
-                            onset: self.features.onset,
-                            transient: self.features.transient,
-                            scene: &scene,
-                            parameters: &parameters,
-                        },
-                    );
-                } else {
-                    self.draw_tunnel(painter, rect);
-                }
-            }
+            2 => self.draw_gpu_preset_layer(painter, rect, 1.0),
             _ => self.draw_studio(painter, rect),
         }
+    }
+
+    fn draw_gpu_preset_layer(&self, painter: &egui::Painter, rect: Rect, drive: f32) {
+        let Some(renderer) = &self.gpu_preset else {
+            self.draw_tunnel(painter, rect);
+            return;
+        };
+        let scene = self.preset_scene_state();
+        let mut parameters = self.mode_parameters;
+        let response_index = self
+            .presets
+            .iter()
+            .find(|preset| preset.id == renderer.active_id())
+            .and_then(|preset| {
+                preset
+                    .parameters
+                    .iter()
+                    .position(|parameter| parameter.id == "response")
+            })
+            .unwrap_or(0);
+        let response = self.gain * self.plugin_multiplier * drive;
+        parameters[response_index] = response;
+        renderer.paint(
+            painter,
+            rect,
+            PresetFrame {
+                time: self.started.elapsed().as_secs_f32(),
+                delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.25),
+                gain: response,
+                waveform: &self.features.waveform,
+                spectrum: &self.features.spectrum,
+                low: self.features.low,
+                mid: self.features.mid,
+                high: self.features.high,
+                rms: self.features.rms,
+                peak: self.features.peak,
+                onset: self.features.onset,
+                transient: self.features.transient,
+                scene: &scene,
+                parameters: &parameters,
+            },
+        );
     }
 
     fn studio_energy(&self, band: StudioBand) -> f32 {
@@ -1934,6 +1934,7 @@ impl VisualizerApp {
             let drive = layer.scale * (0.35 + energy * layer.reactivity);
             match layer.kind {
                 StudioLayerKind::Image => self.draw_studio_image(painter, rect, layer, energy),
+                StudioLayerKind::Preset => self.draw_gpu_preset_layer(painter, rect, drive),
                 StudioLayerKind::Waveform => {
                     self.draw_scope_layer(painter, rect, layer.opacity, layer.blend, drive)
                 }
@@ -2631,12 +2632,8 @@ impl VisualizerApp {
             ui.label("Add");
             for kind in StudioLayerKind::ALL {
                 let unavailable = self.studio.layers.len() >= MAX_STUDIO_LAYERS
-                    || (kind == StudioLayerKind::Image
-                        && self
-                            .studio
-                            .layers
-                            .iter()
-                            .any(|layer| layer.kind == StudioLayerKind::Image));
+                    || (matches!(kind, StudioLayerKind::Image | StudioLayerKind::Preset)
+                        && self.studio.layers.iter().any(|layer| layer.kind == kind));
                 if ui
                     .add_enabled(!unavailable, egui::Button::new(kind.label()))
                     .clicked()
@@ -2691,7 +2688,15 @@ impl VisualizerApp {
         }
 
         if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
-            ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
+            if layer.kind != StudioLayerKind::Preset {
+                ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
+            } else {
+                ui.label(
+                    egui::RichText::new("Opaque base layer · choose the active preset below")
+                        .small()
+                        .color(Color32::from_rgb(125, 150, 170)),
+                );
+            }
             ui.add(egui::Slider::new(&mut layer.reactivity, 0.0..=2.0).text("Reactivity"));
             ui.add(egui::Slider::new(&mut layer.scale, 0.35..=2.0).text("Scale"));
             ui.horizontal(|ui| {
@@ -2704,7 +2709,7 @@ impl VisualizerApp {
                         }
                     });
                 ui.label("Blend");
-                if layer.kind == StudioLayerKind::Image {
+                if matches!(layer.kind, StudioLayerKind::Image | StudioLayerKind::Preset) {
                     layer.blend = StudioBlend::Normal;
                     ui.label("Normal");
                 } else {
@@ -2717,6 +2722,41 @@ impl VisualizerApp {
                         });
                 }
             });
+        }
+
+        if self
+            .studio
+            .layers
+            .get(self.studio.selected)
+            .is_some_and(|layer| layer.kind == StudioLayerKind::Preset)
+        {
+            let active_id = self.gpu_preset.as_ref().map(GpuPresetRenderer::active_id);
+            let active_name = active_id
+                .and_then(|id| self.presets.iter().find(|preset| preset.id == id))
+                .map_or("No valid preset", |preset| preset.name.as_str());
+            let mut chosen_preset = None;
+            ui.horizontal(|ui| {
+                ui.label("Preset");
+                egui::ComboBox::from_id_salt("studio-preset")
+                    .selected_text(active_name)
+                    .width(245.0)
+                    .show_ui(ui, |ui| {
+                        for (index, preset) in self.presets.iter().enumerate() {
+                            if ui
+                                .selectable_label(
+                                    active_id == Some(preset.id.as_str()),
+                                    &preset.name,
+                                )
+                                .clicked()
+                            {
+                                chosen_preset = Some(index);
+                            }
+                        }
+                    });
+            });
+            if let Some(index) = chosen_preset {
+                self.load_preset(index);
+            }
         }
 
         if let Some(image) = &self.studio.image {
@@ -2825,7 +2865,7 @@ impl VisualizerApp {
                 if self.visual == 3 {
                     ui.label(
                         egui::RichText::new(
-                            "Studio composition saving follows after this rendering slice is validated.",
+                            "Studio compositions are session-only in this prototype.",
                         )
                         .small()
                         .color(Color32::from_rgb(125, 150, 170)),

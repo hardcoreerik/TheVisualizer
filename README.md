@@ -8,7 +8,7 @@ The first release target is Windows desktop. The intended experience is simple: 
 
 ## Project status
 
-TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, ten audio-reactive modes, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Eight modes are declarative WGSL presets with grouped sliders; the two host-rendered modes provide waveform trails and frequency-ordered particles. A portable local-test Windows package has been smoke-tested on the development host, but the expanded preset package has not yet completed packaging validation. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
+TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, ten audio-reactive modes, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Eight modes are declarative WGSL presets with grouped sliders; the two host-rendered modes provide waveform trails and frequency-ordered particles. An experimental Studio can layer those visual families with local images. A portable local-test Windows package containing Studio has passed a same-host fresh-extraction smoke, while clean-machine validation remains open. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
 
 ## Current prototype
 
@@ -23,7 +23,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - A visible `Instrument [I]` panel and matching right-click menu for mode selection, live band meters, grouped per-mode sliders, sound zones, seven palettes, five material finishes, per-band colors, and gradient controls for glow, gloss, and saturation
 - Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts
 - A local Visual Director with rolling Visual DNA, structured novelty-scored scene invention, 17 capture choices, controlled photographic imperfections, preflight critique, generation-ready prompts, durable local brief history, and Markdown brief export without making an API request
-- An experimental Studio layer stack for local images, waveform, and particles, with one original photorealistic `Living Photograph` composition
+- An experimental Studio layer stack for local images, GPU presets, waveform, and particles, with one original photorealistic `Living Photograph` composition
 - Local `.tvpreset` discovery, format-2 grouped parameters, refresh, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and safe shader rejection
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure

@@ -11,19 +11,22 @@ const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_EDGE: u32 = 8_192;
 const MAX_IMAGE_ALLOC_BYTES: u64 = 256 * 1024 * 1024;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StudioLayerKind {
     Image,
+    Preset,
     Waveform,
     Particles,
 }
 
 impl StudioLayerKind {
-    pub const ALL: [Self; 3] = [Self::Image, Self::Waveform, Self::Particles];
+    pub const ALL: [Self; 4] = [Self::Image, Self::Preset, Self::Waveform, Self::Particles];
+    const LIVING_PHOTOGRAPH: [Self; 3] = [Self::Image, Self::Waveform, Self::Particles];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Image => "Image",
+            Self::Preset => "GPU Preset",
             Self::Waveform => "Waveform",
             Self::Particles => "Particles",
         }
@@ -91,6 +94,15 @@ impl StudioLayer {
                 reactivity: 0.65,
                 scale: 1.0,
             },
+            StudioLayerKind::Preset => Self {
+                kind,
+                visible: true,
+                opacity: 1.0,
+                blend: StudioBlend::Normal,
+                band: StudioBand::Full,
+                reactivity: 0.8,
+                scale: 1.0,
+            },
             StudioLayerKind::Waveform => Self {
                 kind,
                 visible: true,
@@ -129,7 +141,7 @@ pub struct StudioState {
 impl Default for StudioState {
     fn default() -> Self {
         Self {
-            layers: StudioLayerKind::ALL
+            layers: StudioLayerKind::LIVING_PHOTOGRAPH
                 .into_iter()
                 .map(StudioLayer::living_photograph)
                 .collect(),
@@ -143,16 +155,18 @@ impl Default for StudioState {
 impl StudioState {
     pub fn add(&mut self, kind: StudioLayerKind) -> bool {
         if self.layers.len() == MAX_STUDIO_LAYERS
-            || (kind == StudioLayerKind::Image
-                && self
-                    .layers
-                    .iter()
-                    .any(|layer| layer.kind == StudioLayerKind::Image))
+            || (matches!(kind, StudioLayerKind::Image | StudioLayerKind::Preset)
+                && self.layers.iter().any(|layer| layer.kind == kind))
         {
             return false;
         }
-        self.layers.push(StudioLayer::living_photograph(kind));
-        self.selected = self.layers.len() - 1;
+        if kind == StudioLayerKind::Preset {
+            self.layers.insert(0, StudioLayer::living_photograph(kind));
+            self.selected = 0;
+        } else {
+            self.layers.push(StudioLayer::living_photograph(kind));
+            self.selected = self.layers.len() - 1;
+        }
         true
     }
 
@@ -169,9 +183,15 @@ impl StudioState {
         if self.selected >= self.layers.len() {
             return false;
         }
+        if self.layers[self.selected].kind == StudioLayerKind::Preset {
+            return false;
+        }
         let target = self
             .selected
             .saturating_add_signed(offset)
+            .max(usize::from(
+                self.layers.first().map(|layer| layer.kind) == Some(StudioLayerKind::Preset),
+            ))
             .min(self.layers.len() - 1);
         if target == self.selected {
             return false;
@@ -230,6 +250,10 @@ mod tests {
         let mut studio = StudioState::default();
         assert_eq!(studio.layers.len(), 3);
         assert!(!studio.add(StudioLayerKind::Image));
+        assert!(studio.add(StudioLayerKind::Preset));
+        assert_eq!(studio.layers[0].kind, StudioLayerKind::Preset);
+        assert!(!studio.move_selected(1));
+        assert!(!studio.add(StudioLayerKind::Preset));
         while studio.add(StudioLayerKind::Waveform) {}
         assert_eq!(studio.layers.len(), MAX_STUDIO_LAYERS);
         studio.selected = studio.layers.len() - 1;
