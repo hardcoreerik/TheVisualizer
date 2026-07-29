@@ -14,7 +14,7 @@ Resolve these questions with official documentation, focused code spikes, measur
 
 - What sample-block size, FFT size, overlap, window function, and smoothing produce stable visuals at acceptable latency?
 - How should low, mid, and high bands scale across sample rates?
-- Which beat or onset feature, if any, earns a place beyond the v0.1 energy inputs?
+- Does the implemented adaptive onset pulse remain musically useful across genres, levels, capture devices, and callback cadences, or do measured false hits require revising its transient floor and hysteresis?
 
 ## Rendering and player
 

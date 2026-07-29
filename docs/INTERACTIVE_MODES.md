@@ -35,8 +35,8 @@ The implemented palettes are Cyber Neon, Earth Tones, Arctic Glass, Inferno, Aci
 | --- | --- | --- | ---: |
 | Neon Scope | host | layered oscilloscope and waveform trails | shared response |
 | Particle Forge | host | frequency-ordered particle spiral | shared response |
-| Feedback Tunnel | WGSL | traveling spectral tunnel with zone warping | 12 |
-| Solar Bloom | WGSL | waveform flower, rays, and zone blooms | 12 |
+| Feedback Tunnel | WGSL | onset-punctuated, material-reactive spectral tunnel with zone warping | 12 |
+| Solar Bloom | WGSL | material-reactive waveform flower, rays, and zone blooms | 12 |
 | Neon Horizon | WGSL | synthwave sun, skyline, stars, and grid | 12 |
 | Gravity Wells | WGSL | lensed particle field and orbiting wells | 12 |
 | Ripple Garden | WGSL | zone interference, caustics, and audio flowers | 12 |
@@ -55,7 +55,7 @@ The tenth flagship mode combines the physical **Neverending Party Block** with t
 - Treble drives the rooftop and sky detail.
 - Full-range energy drives the movable sky portal.
 
-The 35 sliders are grouped under Audio, Camera and navigation, Buildings and streets, Hotel and apartments, Party and crowd, Traffic and particles, Sky worlds, Physics, and Generated scene content. The user can rotate the cylindrical city, zoom, reposition any of the four routes, change their audio bands, recolor each band independently, and turn the sky route into a moving hyperspace focus.
+The 35 sliders are grouped under Audio, Camera and navigation, Buildings and streets, Hotel and apartments, Party and crowd, Traffic and particles, Sky worlds, Physics, and Generated scene content. `Beat World Warp` responds to the shared bounded onset pulse rather than treating every amplitude peak as a beat. The user can rotate the cylindrical city, zoom, reposition any of the four routes, change their audio bands, recolor each band independently, and turn the sky route into a moving hyperspace focus.
 
 The scene is procedural. It does not currently use downloaded city photography, recognizable landmarks, generated image assets, or true polygonal 3D geometry. Its host-owned state can be saved in the same `.tvscene` format as every other mode.
 

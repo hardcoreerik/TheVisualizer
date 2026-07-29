@@ -40,6 +40,8 @@ struct FrameExtras {
     peak: f32,
     waveform_len: f32,
     spectrum_len: f32,
+    onset: f32,
+    transient: f32,
 }
 
 @group(0) @binding(2)
@@ -65,6 +67,11 @@ fn palette(value: f32) -> vec3f {
     let amplitude = vec3f(0.45, 0.55, 0.50);
     let phase = vec3f(0.10, 0.36, 0.72);
     return base + amplitude * cos(6.28318 * (value + phase));
+}
+
+fn saturate_color(color: vec3f, amount: f32) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    return mix(vec3f(luminance), color, amount);
 }
 
 @fragment
@@ -101,7 +108,8 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let angle = atan2(uv.y, uv.x);
     let spectrum_index = min(u32(fract(angle / 6.28318 + 1.0) * 64.0), 63u);
     let local_spectrum = clamp(features.spectrum[spectrum_index] * gain, 0.0, 1.5);
-    let depth = 1.0 / (radius + 0.08);
+    let impact = extras.onset * 0.18 + extras.transient * 0.04;
+    let depth = (1.0 + impact) / (radius + 0.08);
     let twist = sin(angle * (7.0 + high * 3.0) * controls.values[4]
         + depth * 0.8 - uniforms.time);
     let travel = depth * (0.42 + low * 0.12) * controls.values[3]
@@ -119,13 +127,29 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
     );
 
     var color = palette(travel * 0.075 + angle * 0.035 + uniforms.time * 0.045);
-    color *= ring_glow * pulse * (0.18 + core * 0.95 * controls.values[8]);
+    color *= ring_glow * pulse * (0.18 + core * 0.95 * controls.values[8])
+        * (1.0 + impact * 1.5);
     color += palette(0.62 + uniforms.time * 0.02) * spokes
         * (0.05 + high * 0.18 + local_spectrum * 0.14);
     color += vec3f(0.005, 0.009, 0.022);
 
     let vignette = smoothstep(1.65, 0.18 * controls.values[9], radius);
     color *= 0.32 + vignette * 0.92;
+    let glow = scene.values[92];
+    let gloss = scene.values[93];
+    let finish = scene.values[95];
+    if finish < 0.5 {
+        color *= 0.85 + glow * 0.35;
+    } else if finish < 1.5 {
+        color += pow(max(color, vec3f(0.0)), vec3f(4.0)) * gloss;
+    } else if finish < 2.5 {
+        color *= 0.72;
+    } else if finish < 3.5 {
+        color = mix(color, vec3f(dot(color, vec3f(0.3, 0.55, 0.15))), 0.22 + gloss * 0.25);
+    } else {
+        color = mix(color, color * color + palette(0.62) * 0.04, 0.35 + gloss * 0.35);
+    }
+    color = saturate_color(color, scene.values[94]);
     color = 1.0 - exp(-color * (1.0 + rms * 1.8));
 
     return vec4f(color, 1.0);

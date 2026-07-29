@@ -12,6 +12,7 @@ use crate::analysis::{SPECTRUM_BANDS, WAVEFORM_POINTS};
 use crate::preset::Preset;
 
 const AUDIO_FEATURE_FLOATS: usize = WAVEFORM_POINTS + SPECTRUM_BANDS;
+const FRAME_EXTRAS_FLOATS: usize = 8;
 pub const PRESET_SCENE_FLOATS: usize = 96;
 pub const PRESET_PARAMETER_FLOATS: usize = 40;
 
@@ -27,6 +28,8 @@ pub struct PresetFrame<'a> {
     pub high: f32,
     pub rms: f32,
     pub peak: f32,
+    pub onset: f32,
+    pub transient: f32,
     pub scene: &'a [f32],
     pub parameters: &'a [f32],
 }
@@ -45,12 +48,16 @@ impl PresetFrame<'_> {
         ]
     }
 
-    fn extras(self) -> [f32; 4] {
+    fn extras(self) -> [f32; FRAME_EXTRAS_FLOATS] {
         [
             self.delta,
             self.peak,
             self.waveform.len() as f32,
             self.spectrum.len() as f32,
+            self.onset,
+            self.transient,
+            0.0,
+            0.0,
         ]
     }
 
@@ -170,7 +177,9 @@ fn create_resources(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
+                    min_binding_size: NonZeroU64::new(
+                        (FRAME_EXTRAS_FLOATS * size_of::<f32>()) as u64,
+                    ),
                 },
                 count: None,
             },
@@ -238,7 +247,7 @@ fn create_resources(
     });
     let extras_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("TheVisualizer preset frame-extras buffer"),
-        contents: bytemuck::cast_slice(&[0.0_f32; 4]),
+        contents: bytemuck::cast_slice(&[0.0_f32; FRAME_EXTRAS_FLOATS]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
     });
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -316,7 +325,7 @@ fn concise_validation_error(error: &str) -> String {
 
 struct PresetCallback {
     uniforms: [f32; 8],
-    extras: [f32; 4],
+    extras: [f32; FRAME_EXTRAS_FLOATS],
     audio_features: [f32; AUDIO_FEATURE_FLOATS],
     scene: [f32; PRESET_SCENE_FLOATS],
     parameters: [f32; PRESET_PARAMETER_FLOATS],
@@ -405,6 +414,8 @@ mod tests {
             high: 5.0,
             rms: 6.0,
             peak: 0.9,
+            onset: 1.0,
+            transient: 0.7,
             scene: &[7.0, 8.0],
             parameters: &[9.0],
         };
@@ -412,7 +423,7 @@ mod tests {
             frame.uniforms([1920, 1080]),
             [1920.0, 1080.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
         );
-        assert_eq!(frame.extras(), [0.016, 0.9, 2.0, 1.0]);
+        assert_eq!(frame.extras(), [0.016, 0.9, 2.0, 1.0, 1.0, 0.7, 0.0, 0.0]);
         let audio = frame.audio_features();
         assert_eq!(&audio[..3], &[0.25, -0.5, 0.0]);
         assert_eq!(audio[WAVEFORM_POINTS], 0.75);

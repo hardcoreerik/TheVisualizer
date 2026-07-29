@@ -43,7 +43,7 @@ The implemented `.tvplugin` manifest contains:
 
 The plugin ABI is a size-tagged C ABI rather than a Rust ABI. Rust definitions and a matching C/C++ header are in the [Plugin SDK](../plugin-sdk/README.md). ABI v1 implements discovery, metadata inspection, explicit session approval, initialization, synchronous per-frame feature processing, one bounded response-multiplier output, and shutdown.
 
-The host supplies a versioned, size-tagged read-only snapshot containing time, frame delta, waveform and spectrum slices, RMS, peak, and low/mid/high energy. Feature pointers are valid only for the synchronous process call. The plugin may maintain CPU-side state and return a response multiplier that the host clamps to `0.25..=2.0` before driving a host-rendered shader. It does not receive direct `wgpu`, Direct3D, Vulkan, Metal, native window, capture-device, or audio-buffer ownership in v0.1.
+The host supplies the native plugin ABI a versioned, size-tagged read-only snapshot containing time, frame delta, waveform and spectrum slices, RMS, peak, and low/mid/high energy. Feature pointers are valid only for the synchronous process call. Format-2 WGSL presets additionally receive transient intensity and the bounded onset pulse after the original four frame-extras fields, preserving the existing field offsets. The plugin may maintain CPU-side state and return a response multiplier that the host clamps to `0.25..=2.0` before driving a host-rendered shader. It does not receive direct `wgpu`, Direct3D, Vulkan, Metal, native window, capture-device, or audio-buffer ownership in v0.1.
 
 ## Trust and safety
 

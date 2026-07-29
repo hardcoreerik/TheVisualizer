@@ -2,7 +2,7 @@
 
 Status: local brief composer implemented; paid image generation, editing, critique, and asset import are not connected.
 
-The Visual Director converts the active visualization, a rolling audio window, routed colors, material finish, and explicit creative controls into an inspectable image brief. It is available inside `Instrument [I]` and sends no network request.
+The Visual Director converts the active visualization, a rolling audio window, routed colors, material finish, and explicit creative controls into an inspectable image brief. It opens in a separate experimental window from the single `Visual Director (Experimental)…` button in `Instrument [I]` and sends no network request.
 
 ## Current local pipeline
 

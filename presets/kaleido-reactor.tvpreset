@@ -21,7 +21,10 @@ struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
 struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
 @group(0) @binding(1) var<storage, read> features: AudioFeatures;
-struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32 }
+struct FrameExtras {
+    delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32,
+    onset: f32, transient: f32,
+}
 @group(0) @binding(2) var<uniform> extras: FrameExtras;
 struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;

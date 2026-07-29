@@ -40,6 +40,8 @@ struct FrameExtras {
     peak: f32,
     waveform_len: f32,
     spectrum_len: f32,
+    onset: f32,
+    transient: f32,
 }
 
 @group(0) @binding(2)

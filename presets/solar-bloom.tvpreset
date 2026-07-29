@@ -40,6 +40,8 @@ struct FrameExtras {
     peak: f32,
     waveform_len: f32,
     spectrum_len: f32,
+    onset: f32,
+    transient: f32,
 }
 
 @group(0) @binding(2)
@@ -62,6 +64,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f
 
 fn palette(t: f32) -> vec3f {
     return 0.52 + 0.48 * cos(6.28318 * (t + vec3f(0.02, 0.31, 0.58)));
+}
+
+fn saturate_color(color: vec3f, amount: f32) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    return mix(vec3f(luminance), color, amount);
 }
 
 @fragment
@@ -111,6 +118,21 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
     color += vec3f(1.0, 0.32, 0.06) * rays
         * (0.04 + high * controls.values[2] * 0.25);
     color *= 0.3 + smoothstep(1.45, 0.12, radius);
+    let glow_amount = scene.values[92];
+    let gloss = scene.values[93];
+    let finish = scene.values[95];
+    if finish < 0.5 {
+        color *= 0.85 + glow_amount * 0.35;
+    } else if finish < 1.5 {
+        color += pow(max(color, vec3f(0.0)), vec3f(4.0)) * gloss;
+    } else if finish < 2.5 {
+        color *= 0.72;
+    } else if finish < 3.5 {
+        color = mix(color, vec3f(dot(color, vec3f(0.3, 0.55, 0.15))), 0.22 + gloss * 0.25);
+    } else {
+        color = mix(color, color * color + palette(0.16) * 0.04, 0.35 + gloss * 0.35);
+    }
+    color = saturate_color(color, scene.values[94]);
     color = 1.0 - exp(-color * controls.values[11]
         * (0.8 + rms * 1.6 + extras.peak * 0.6));
     return vec4f(color, 1.0);

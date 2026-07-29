@@ -19,6 +19,7 @@ pub struct Features {
     pub spectral_flatness: f32,
     pub crest_factor: f32,
     pub transient: f32,
+    pub onset: f32,
 }
 
 impl Default for Features {
@@ -36,6 +37,7 @@ impl Default for Features {
             spectral_flatness: 0.0,
             crest_factor: 0.0,
             transient: 0.0,
+            onset: 0.0,
         }
     }
 }
@@ -44,6 +46,8 @@ pub struct Analyzer {
     fft: Arc<dyn Fft<f32>>,
     input: Vec<Complex32>,
     previous_magnitudes: Vec<f32>,
+    transient_floor: f32,
+    onset_armed: bool,
 }
 
 impl Analyzer {
@@ -53,7 +57,15 @@ impl Analyzer {
             fft: planner.plan_fft_forward(FFT_SIZE),
             input: vec![Complex32::ZERO; FFT_SIZE],
             previous_magnitudes: vec![0.0; FFT_SIZE / 2 - 1],
+            transient_floor: 0.0,
+            onset_armed: true,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.previous_magnitudes.fill(0.0);
+        self.transient_floor = 0.0;
+        self.onset_armed = true;
     }
 
     pub fn analyze(&mut self, samples: &[f32], sample_rate: u32) -> Features {
@@ -125,6 +137,19 @@ impl Analyzer {
             .map(|(current, previous)| (current - previous).max(0.0))
             .sum::<f32>();
         let transient = (positive_flux / magnitude_sum.max(1.0e-12)).clamp(0.0, 1.0);
+        let onset_threshold = (self.transient_floor * 2.5 + 0.04).clamp(0.08, 0.6);
+        let onset = f32::from(self.onset_armed && rms > 0.01 && transient > onset_threshold);
+        if onset > 0.0 {
+            self.onset_armed = false;
+        } else if transient < onset_threshold * 0.5 {
+            self.onset_armed = true;
+        }
+        let floor_speed = if transient > self.transient_floor {
+            0.04
+        } else {
+            0.12
+        };
+        self.transient_floor += (transient - self.transient_floor) * floor_speed;
         self.previous_magnitudes.clone_from_slice(&magnitudes);
         let mut spectrum = vec![0.0; SPECTRUM_BANDS];
         for (band, value) in spectrum.iter_mut().enumerate() {
@@ -180,6 +205,7 @@ impl Analyzer {
             spectral_flatness,
             crest_factor: if rms > f32::EPSILON { peak / rms } else { 0.0 },
             transient,
+            onset,
         }
     }
 }
@@ -207,8 +233,68 @@ mod tests {
         assert!(tone.spectral_flatness < 0.1);
         assert!(tone.crest_factor > 1.3);
         assert!(tone.transient > 0.5);
+        assert_eq!(tone.onset, 1.0);
 
         let repeated = analyzer.analyze(&sine, 48_000);
         assert!(repeated.transient < tone.transient);
+        assert_eq!(repeated.onset, 0.0);
+
+        analyzer.analyze(&vec![0.0; FFT_SIZE], 48_000);
+        let next_tone = analyzer.analyze(&sine, 48_000);
+        assert_eq!(next_tone.onset, 1.0);
+    }
+
+    #[test]
+    fn repeated_attacks_emit_one_pulse_each() {
+        let mut analyzer = Analyzer::new();
+        let hit = (0..FFT_SIZE)
+            .map(|index| {
+                let envelope = (-(index as f32) / 320.0).exp();
+                (std::f32::consts::TAU * 90.0 * index as f32 / 48_000.0).sin() * envelope * 0.8
+            })
+            .collect::<Vec<_>>();
+        let silence = vec![0.0; FFT_SIZE];
+
+        assert_eq!(analyzer.analyze(&hit, 48_000).onset, 1.0);
+        assert_eq!(analyzer.analyze(&hit, 48_000).onset, 0.0);
+        assert_eq!(analyzer.analyze(&silence, 48_000).onset, 0.0);
+        assert_eq!(analyzer.analyze(&hit, 48_000).onset, 1.0);
+
+        analyzer.reset();
+        let quiet_noise = (0..FFT_SIZE)
+            .map(|index| if index % 2 == 0 { 0.005 } else { -0.005 })
+            .collect::<Vec<_>>();
+        assert_eq!(analyzer.analyze(&quiet_noise, 48_000).onset, 0.0);
+    }
+
+    #[test]
+    fn onset_count_is_stable_across_sample_rates_and_analysis_cadence() {
+        for sample_rate in [44_100_usize, 48_000] {
+            let mut audio = vec![0.0; sample_rate * 4];
+            for start in (sample_rate / 4..audio.len()).step_by(sample_rate / 2) {
+                for offset in 0..FFT_SIZE.min(audio.len() - start) {
+                    let envelope = (-(offset as f32) / 320.0).exp();
+                    audio[start + offset] +=
+                        (std::f32::consts::TAU * 90.0 * offset as f32 / sample_rate as f32).sin()
+                            * envelope
+                            * 0.8;
+                }
+            }
+
+            let count_at = |cadence: usize| {
+                let mut analyzer = Analyzer::new();
+                (FFT_SIZE..audio.len())
+                    .step_by(sample_rate / cadence)
+                    .filter(|end| {
+                        analyzer
+                            .analyze(&audio[end - FFT_SIZE..*end], sample_rate as u32)
+                            .onset
+                            > 0.5
+                    })
+                    .count()
+            };
+            let counts = [count_at(30), count_at(60), count_at(165)];
+            assert_eq!(counts, [8, 8, 8], "sample rate {sample_rate}");
+        }
     }
 }

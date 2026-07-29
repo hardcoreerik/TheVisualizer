@@ -63,6 +63,8 @@ struct FrameExtras {
     peak: f32,
     waveform_len: f32,
     spectrum_len: f32,
+    onset: f32,
+    transient: f32,
 }
 
 @group(0) @binding(2)
@@ -149,7 +151,7 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let bass_drive = bass * controls.values[1];
     let party_drive = mids * controls.values[2];
     let sky_drive = treble * controls.values[3];
-    let beat_warp = extras.peak * controls.values[4];
+    let beat_warp = extras.onset * controls.values[4];
 
     let field_of_view = controls.values[5] * 0.0174533;
     let yaw = scene.values[2] + uniforms.time * controls.values[6];

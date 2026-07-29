@@ -23,7 +23,7 @@ use render::{GpuPresetRenderer, PRESET_PARAMETER_FLOATS, PRESET_SCENE_FLOATS, Pr
 use scene::{SavedScene, SceneSnapshot, SceneZone};
 use visual_director::{Aspect, CaptureProfile, OutputIntent, VisualDirector};
 
-const VISUAL_NAMES: [&str; 3] = ["NEON SCOPE", "PARTICLE ARRAY", "GPU PRESET"];
+const VISUAL_NAMES: [&str; 3] = ["NEON SCOPE", "PARTICLE FORGE", "GPU PRESET"];
 const VISUAL_BUTTONS: [&str; 3] = ["1 Scope", "2 Particles", "3 Preset"];
 const DEFAULT_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const VISUAL_TRAIL_FRAMES: usize = 10;
@@ -405,6 +405,33 @@ impl LatencyStats {
 }
 
 #[derive(Default)]
+struct OnsetStats {
+    started: Option<Instant>,
+    count: u64,
+    last: Option<Instant>,
+}
+
+impl OnsetStats {
+    fn observe(&mut self, onset: f32, now: Instant) {
+        self.started.get_or_insert(now);
+        if onset > 0.5 {
+            self.count = self.count.saturating_add(1);
+            self.last = Some(now);
+        }
+    }
+
+    fn per_minute(&self, now: Instant) -> f32 {
+        self.started.map_or(0.0, |started| {
+            self.count as f32 * 60.0
+                / now
+                    .saturating_duration_since(started)
+                    .as_secs_f32()
+                    .max(1.0)
+        })
+    }
+}
+
+#[derive(Default)]
 struct FrameStats {
     last_frame: Option<Instant>,
     current_ms: f64,
@@ -622,12 +649,14 @@ struct VisualizerApp {
     colors: ColorSystem,
     mode_parameters: [f32; PRESET_PARAMETER_FLOATS],
     latency: LatencyStats,
+    onset_stats: OnsetStats,
     frame_stats: FrameStats,
     default_switch_timing: Option<DefaultSwitchTiming>,
     pending_default_switch: Option<Instant>,
     visual: usize,
     overlay: bool,
     instrument_panel: bool,
+    visual_director_panel: bool,
     presentation: PresentationMode,
     frame_limit: FrameLimit,
     last_paced_frame: Instant,
@@ -734,12 +763,14 @@ impl VisualizerApp {
             colors: ColorSystem::default(),
             mode_parameters,
             latency: LatencyStats::default(),
+            onset_stats: OnsetStats::default(),
             frame_stats: FrameStats::default(),
             default_switch_timing: None,
             pending_default_switch: None,
             visual: 0,
             overlay: true,
             instrument_panel: false,
+            visual_director_panel: false,
             presentation: PresentationMode::Windowed,
             frame_limit: FrameLimit::Display,
             last_paced_frame: started,
@@ -776,6 +807,8 @@ impl VisualizerApp {
                     *samples = SampleBuffer::default();
                 }
                 self.latency = LatencyStats::default();
+                self.onset_stats = OnsetStats::default();
+                self.analyzer.reset();
                 self.features = Features::default();
                 self.visual_history = VisualHistory::default();
                 self.last_analyzed_callback_sequence = 0;
@@ -892,17 +925,19 @@ impl VisualizerApp {
             return;
         }
         self.features = self.analyzer.analyze(&snapshot.samples, sample_rate);
-        self.visual_director.observe(&self.features, Instant::now());
+        let now = Instant::now();
+        self.onset_stats.observe(self.features.onset, now);
+        self.visual_director.observe(&self.features, now);
         self.visual_history
             .update(snapshot.callback_sequence, &self.features);
         if let Some(timing) = &mut self.default_switch_timing {
             timing.observe_first_callback(
                 &mut self.pending_default_switch,
                 snapshot.callback_sequence,
-                Instant::now(),
+                now,
             );
         }
-        if let Some(age) = snapshot.newest_sample_age(Instant::now()) {
+        if let Some(age) = snapshot.newest_sample_age(now) {
             self.latency.observe(snapshot.callback_sequence, age);
         }
     }
@@ -1833,6 +1868,8 @@ impl VisualizerApp {
                             high: self.features.high,
                             rms: self.features.rms,
                             peak: self.features.peak,
+                            onset: self.features.onset,
+                            transient: self.features.transient,
                             scene: &scene,
                             parameters: &parameters,
                         },
@@ -1895,7 +1932,7 @@ impl VisualizerApp {
         painter.add(egui::Shape::line(
             points.clone(),
             Stroke::new(
-                13.0,
+                13.0 + self.features.onset * 8.0,
                 self.colors
                     .full
                     .gamma_multiply(0.05 + self.colors.glow * 0.04),
@@ -1956,7 +1993,8 @@ impl VisualizerApp {
                 );
             }
         }
-        let core = scale * (0.035 + self.features.low * self.gain * 0.055);
+        let core =
+            scale * (0.035 + self.features.low * self.gain * 0.055 + self.features.onset * 0.012);
         painter.circle_filled(
             center,
             core * 1.8,
@@ -1981,7 +2019,10 @@ impl VisualizerApp {
         for ring in (0..22).rev() {
             let phase =
                 ((ring as f32 / 22.0 + time * (0.08 + self.features.low * 0.15)) % 1.0).powf(1.7);
-            let radius = 18.0 + phase * max_radius * (1.0 + self.features.low * 0.16);
+            let radius = 18.0
+                + phase
+                    * max_radius
+                    * (1.0 + self.features.low * 0.16 + self.features.onset * 0.04);
             let sides = 8;
             let rotation = time * 0.22 + ring as f32 * 0.11 + self.features.high * 0.6;
             let points: Vec<Pos2> = (0..=sides)
@@ -2316,6 +2357,32 @@ impl VisualizerApp {
                                      compositor/display scanout, and the separate FFT window duration.",
                                 );
                             }
+                            let now = Instant::now();
+                            let last_onset = self.onset_stats.last.map_or_else(
+                                || "none".to_owned(),
+                                |last| {
+                                    format!(
+                                        "{:.2}s",
+                                        now.saturating_duration_since(last).as_secs_f32()
+                                    )
+                                },
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "ONSET {} · {:.0}/min · LAST {} · FLUX {:.2}",
+                                    self.onset_stats.count,
+                                    self.onset_stats.per_minute(now),
+                                    last_onset,
+                                    self.features.transient
+                                ))
+                                .small()
+                                .monospace()
+                                .color(Color32::from_rgb(170, 135, 205)),
+                            )
+                            .on_hover_text(
+                                "Adaptive attack events since the current capture opened. This is \
+                                 diagnostic onset telemetry, not beat position, tempo, or BPM.",
+                            );
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new("PACE")
@@ -2570,9 +2637,22 @@ impl VisualizerApp {
                     });
                 }
 
-                egui::CollapsingHeader::new("Visual Director · Image Brief")
-                    .id_salt("instrument-visual-director")
-                    .show(ui, |ui| {
+                ui.separator();
+                if ui.button("Visual Director (Experimental)…").clicked() {
+                    self.visual_director_panel = true;
+                }
+                let mut director_open = self.visual_director_panel;
+                if director_open {
+                    egui::Window::new("VISUAL DIRECTOR · EXPERIMENTAL")
+                        .id(egui::Id::new("visual-director-panel"))
+                        .default_width(520.0)
+                        .min_width(420.0)
+                        .max_width(720.0)
+                        .resizable(true)
+                        .vscroll(true)
+                        .open(&mut director_open)
+                        .show(ctx, |ui| {
+                            ui.set_max_width(680.0);
                         ui.label(
                             egui::RichText::new(
                                 "Turns the current mode, routed colors, and live audio into an \
@@ -2879,7 +2959,9 @@ impl VisualizerApp {
                             "OPENAI_API_KEY is not set. Brief composition remains fully local and \
                              cost-free."
                         });
-                    });
+                        });
+                }
+                self.visual_director_panel = director_open;
 
                 egui::CollapsingHeader::new(format!(
                     "Sound Zones · {}/{}",
@@ -3465,9 +3547,9 @@ fn resource_directory(environment: &str, folder: &str) -> PathBuf {
 mod tests {
     use super::{
         ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
-        LatencyStats, MAX_SOUND_ZONES, PalettePreset, PresentationMode, SourceKind, VisualHistory,
-        callback_is_new, default_needs_recovery, lerp_color, pacing_delay, status_hint,
-        visual_index_for_key,
+        LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
+        VisualHistory, callback_is_new, default_needs_recovery, lerp_color, pacing_delay,
+        status_hint, visual_index_for_key,
     };
     use std::time::{Duration, Instant};
 
@@ -3592,6 +3674,22 @@ mod tests {
         assert_eq!(stats.current_ms, 30.0);
         assert_eq!(stats.average_ms, 20.0);
         assert_eq!(stats.peak_ms, 30.0);
+    }
+
+    #[test]
+    fn onset_stats_count_only_events() {
+        let started = Instant::now();
+        let mut stats = OnsetStats::default();
+        stats.observe(0.0, started);
+        stats.observe(0.5, started);
+        assert_eq!(stats.count, 0);
+        assert!(stats.last.is_none());
+
+        stats.observe(1.0, started);
+        stats.observe(0.0, started + Duration::from_millis(10));
+        assert_eq!(stats.count, 1);
+        assert_eq!(stats.last, Some(started));
+        assert_eq!(stats.per_minute(started + Duration::from_secs(60)), 1.0);
     }
 
     #[test]
