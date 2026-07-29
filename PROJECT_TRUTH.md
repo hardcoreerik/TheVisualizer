@@ -1,15 +1,15 @@
 # Project Truth
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 This document records verified project state. Planned behavior belongs in the [Roadmap](ROADMAP.md) and design documents, not in this file.
 
 ## Verified locally
 
 - `F:\Ai\TheVisualizer` began as an empty directory.
-- A local Git repository was initialized with `main` as its source-of-truth branch.
-- The documentation foundation is being authored on `docs/project-foundation`.
-- Local `main` and `docs/project-foundation` share the empty baseline commit `be7a8e0`; no merge or remote repository exists.
+- A Git repository was initialized with protected source-of-truth branch `main` and GitHub remote `origin`.
+- The implementation and documentation foundation is being authored on `docs/project-foundation`; it is published as a review lane and is not merged into `main`.
+- On 2026-07-28, `origin/main` remained at baseline commit `be7a8e0` while `origin/docs/project-foundation` was at `966138c` before the Studio checkpoint.
 - The development host runs Windows.
 - Rust `1.96.0`, Cargo `1.96.0`, Git `2.51.1.windows.1`, CMake, and Ninja were present on `PATH` during the initial scout.
 - Windows reported an AMD Radeon integrated GPU and an NVIDIA GeForce RTX 5070 Ti. Windows PnP currently marks the AMD adapter `CM_PROB_DISABLED`; NVIDIA reports `CM_PROB_NONE`.
@@ -55,6 +55,9 @@ This document records verified project state. Planned behavior belongs in the [R
 - Strict, bounded `.tvscene` save/discovery/restore for named host-owned views containing mode identity, forty finite parameter slots, routed colors/materials, camera, and up to eight zones. Missing presets and malformed, oversized, duplicate-key, non-finite, or out-of-range scene files fail visibly without executing code.
 - TheVisualCityScape starts with four pinned Bass/Mid/Treble/Full routes and exposes 35 controls across nine groups.
 - A visible, scrollable Instrument panel exposes live band meters, sound-zone editing, active-mode-only controls, routed colors/materials, gradient bars for glow/gloss/saturation, and camera controls. `I` toggles it.
+- An experimental Studio visual composites a bounded stack of up to eight host-painted Image, Waveform, and Particles layers. Layers expose visibility, ordering, opacity, audio-band routing, reactivity, scale, and Normal/Add blending where supported.
+- Studio accepts local PNG, JPEG, and WebP images through native desktop drag and drop. The decoder bounds file size to 64 MiB, image edges to 8192 pixels, and allocation to 256 MiB before creating a host-owned egui texture.
+- The default `Living Photograph` composition loads one original project-owned rainy-greenhouse image and layers the existing waveform and particle instruments above restrained audio-reactive crop and exposure motion. Asset provenance and the generation prompt are recorded beside the image.
 - Analysis now also measures spectral centroid, 85% spectral rolloff, spectral flatness, crest factor, and positive spectral flux.
 - A local Visual Director combines those measurements with a bounded 12-second energy/transient history to derive dynamics, onset density, movement, dominant band, and quiet/impact/building/receding/sustained passage state.
 - Ten creative controls and 17 capture choices drive structured subject/environment/era/event/scale/weather/composition/light candidates. Weighted history similarity prioritizes concept novelty over cosmetic variation; two or three plausible photographic imperfections, contextual cliché restraints, a deterministic preflight critique, and a generation-ready prompt follow. A versioned local brief history preserves generation metadata, prompts, and novelty records across app restarts; explicit Markdown export records the full brief, Visual DNA, and preflight scores. It makes no API request.
@@ -67,6 +70,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - An optional `THEVISUALIZER_PLUGINS` directory override for focused discovery and packaging checks.
 - A guarded Windows x86_64 packaging script that builds the locked release workspace and stages a portable local-test archive under `dist`.
 - The portable package script stages the player, all eight bundled WGSL presets, the example-plugin manifest and DLL, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums.
+- The package script now also stages the bundled Studio image and its provenance record. That revised package path has not been run.
 - The staged plugin manifest uses a package-relative DLL path; no development-machine path is included in packaged text or manifests.
 - Apache-2.0 project licensing with a canonical `LICENSE`, contributor `NOTICE`, manifest metadata, and a recorded compatibility/provenance policy.
 - A fail-closed Windows license collector inventories the locked target graph, copies crate-provided files, and uses exact Cargo-pinned upstream sources when crates omit them. Its sole canonical-text fallback is CC0-1.0 from SPDX license-list-data v3.26.0 for `hexf-parse`.
@@ -76,7 +80,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - `WAITING`, `LIVE`, `SILENT`, and `ERROR` status presentation with source-specific next-step guidance for waiting and silence. Capture replacement clears prior features and visual history before the new source reports data.
 - A repository-owned SVG waveform mark, derived PNG, and embedded native application/window icon. The running app does not depend on an external icon file.
 - Display-synchronized, 60 FPS, and 30 FPS host-side frame pacing selectable beside the measured application cadence in the details disclosure.
-- Visible `1 Scope`, `2 Particles`, and `3 Preset` controls with matching number-key selection, Left/Right cycling, and a portable ASCII shortcut footer.
+- Visible `1 Scope`, `2 Particles`, `3 Preset`, and `4 Studio` controls with matching number-key selection, Left/Right cycling, and a portable ASCII shortcut footer.
 - Thirty-one focused automated tests across the workspace covering analysis and onset hysteresis, repeated decaying attacks, quiet-noise rejection, deterministic cadence stability, resettable onset telemetry, callback-sequence gating, quiet-state guidance, frame pacing, direct visual shortcuts, devices, same-ID capture-failure recovery, timestamp adjustment, latency aggregation, frame-cadence smoothing, default-switch timing, bounded visual history, interaction/color bounds, presentation, presets, strict saved-scene round-trip and bounds, Visual Director rolling history, structured novelty, durable brief-history reload, capture/output planning, the WGSL scalar/feature/scene/parameter buffer contract, strict plugin manifests, ABI sizes, and the example-plugin lifecycle.
 
 ## Runtime-observed results
@@ -99,6 +103,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - The rebuilt compact overlay showed `Listening for system audio…` while waiting, removed contextual guidance during live capture, and showed `No signal · play audio on this device` after the stream became silent. Switching through a live microphone and back to system capture immediately cleared the prior source's levels and trails. The waiting guidance and all compact controls remained visible at the 800×500 minimum content size (816×539 decorated window).
 - The rebuilt debug executable and a fresh extracted release displayed the repository-owned waveform mark in the Windows title bar at its native small-icon size.
 - Named Scope, Particles, and Preset controls remained on one row at 1280×720 and the 800×500 minimum. Mouse selection changed to Particle Forge, and repeated Windows system sounds visibly drove its bounded frequency trails without reopening capture.
+- The rebuilt development application launched on 2026-07-28 with active system capture and exposed the fourth `Studio` control. Windows app-capture automation became unavailable before the Studio image composition could be visually inspected, so the rendering and interaction acceptance pass remains open.
 - With callback-sequence gating active, the release build produced live waveform motion from repeated Windows system sounds, switched to the default microphone with fresh nonzero features, then returned to system capture and again reported `LIVE` at approximately 0.051 RMS / 0.092 peak. This verifies that source replacement resets the gate.
 - Three quiet ten-second samples averaged 8.8% of one CPU core for both the committed package and the callback-gated release on this host. The current WASAPI callback cadence therefore produced no measurable local CPU reduction; the gate prevents stale re-analysis when callback cadence is lower than UI cadence but is not claimed as a performance win here.
 - Live system audio visibly produced multiple fading scope traces and expanded the frequency-ordered particle spiral. The particle field remained stable after silence and scaled through 1280×720 windowed and fullscreen presentation.

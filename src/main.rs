@@ -4,6 +4,7 @@ mod plugin;
 mod preset;
 mod render;
 mod scene;
+mod studio;
 mod visual_director;
 
 use std::{
@@ -21,10 +22,13 @@ use plugin::{LoadedPlugin, PluginPackage};
 use preset::Preset;
 use render::{GpuPresetRenderer, PRESET_PARAMETER_FLOATS, PRESET_SCENE_FLOATS, PresetFrame};
 use scene::{SavedScene, SceneSnapshot, SceneZone};
+use studio::{
+    MAX_STUDIO_LAYERS, StudioBand, StudioBlend, StudioLayer, StudioLayerKind, StudioState,
+};
 use visual_director::{Aspect, CaptureProfile, OutputIntent, VisualDirector};
 
-const VISUAL_NAMES: [&str; 3] = ["NEON SCOPE", "PARTICLE FORGE", "GPU PRESET"];
-const VISUAL_BUTTONS: [&str; 3] = ["1 Scope", "2 Particles", "3 Preset"];
+const VISUAL_NAMES: [&str; 4] = ["NEON SCOPE", "PARTICLE FORGE", "GPU PRESET", "STUDIO"];
+const VISUAL_BUTTONS: [&str; 4] = ["1 Scope", "2 Particles", "3 Preset", "4 Studio"];
 const DEFAULT_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const VISUAL_TRAIL_FRAMES: usize = 10;
 const MAX_SOUND_ZONES: usize = 8;
@@ -583,6 +587,7 @@ fn visual_index_for_key(key: egui::Key) -> Option<usize> {
         egui::Key::Num1 => Some(0),
         egui::Key::Num2 => Some(1),
         egui::Key::Num3 => Some(2),
+        egui::Key::Num4 => Some(3),
         _ => None,
     }
 }
@@ -645,6 +650,7 @@ struct VisualizerApp {
     last_analyzed_callback_sequence: u64,
     features: Features,
     visual_history: VisualHistory,
+    studio: StudioState,
     interaction: InteractionState,
     colors: ColorSystem,
     mode_parameters: [f32; PRESET_PARAMETER_FLOATS],
@@ -725,6 +731,13 @@ impl VisualizerApp {
         let scene_notice =
             (!scene_discovery.errors.is_empty()).then(|| scene_discovery.errors.join("\n"));
         let started = Instant::now();
+        let mut studio = StudioState::default();
+        let living_photograph = asset_directory().join("living-photograph-greenhouse.png");
+        if living_photograph.is_file()
+            && let Err(error) = studio.load_image(&creation.egui_ctx, &living_photograph)
+        {
+            studio.notice = Some(error);
+        }
 
         let samples = Arc::new(Mutex::new(SampleBuffer::default()));
         let (capture, capture_error) =
@@ -759,6 +772,7 @@ impl VisualizerApp {
             last_analyzed_callback_sequence: 0,
             features: Features::default(),
             visual_history: VisualHistory::default(),
+            studio,
             interaction: InteractionState::default(),
             colors: ColorSystem::default(),
             mode_parameters,
@@ -1034,7 +1048,7 @@ impl VisualizerApp {
                 "host.particle-forge".to_owned(),
                 "Particle Forge".to_owned(),
             )),
-            _ => {
+            2 => {
                 let id = self
                     .gpu_preset
                     .as_ref()
@@ -1047,6 +1061,10 @@ impl VisualizerApp {
                     .ok_or_else(|| "The active preset is no longer available.".to_owned())?;
                 Ok((preset.id.clone(), preset.name.clone()))
             }
+            _ => Err(
+                "Studio composition saving is not implemented in this first rendering slice."
+                    .to_owned(),
+            ),
         }
     }
 
@@ -1354,10 +1372,15 @@ impl VisualizerApp {
             )
         });
         let direct_visual = ctx.input(|input| {
-            [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3]
-                .into_iter()
-                .find(|key| input.key_pressed(*key))
-                .and_then(visual_index_for_key)
+            [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+            ]
+            .into_iter()
+            .find(|key| input.key_pressed(*key))
+            .and_then(visual_index_for_key)
         });
         if tab {
             self.overlay = !self.overlay;
@@ -1836,9 +1859,9 @@ impl VisualizerApp {
         }
 
         match self.visual {
-            0 => self.draw_scope(painter, rect),
-            1 => self.draw_particles(painter, rect),
-            _ => {
+            0 => self.draw_scope_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
+            1 => self.draw_particles_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
+            2 => {
                 if let Some(renderer) = &self.gpu_preset {
                     let scene = self.preset_scene_state();
                     let mut parameters = self.mode_parameters;
@@ -1878,16 +1901,121 @@ impl VisualizerApp {
                     self.draw_tunnel(painter, rect);
                 }
             }
+            _ => self.draw_studio(painter, rect),
         }
     }
 
-    fn draw_scope(&self, painter: &egui::Painter, rect: Rect) {
+    fn studio_energy(&self, band: StudioBand) -> f32 {
+        match band {
+            StudioBand::Full => self.features.rms * 3.0,
+            StudioBand::Bass => self.features.low,
+            StudioBand::Mid => self.features.mid,
+            StudioBand::Treble => self.features.high,
+        }
+        .clamp(0.0, 1.0)
+    }
+
+    fn studio_color(color: Color32, opacity: f32, blend: StudioBlend) -> Color32 {
+        let color = color.gamma_multiply(opacity.clamp(0.0, 1.0));
+        match blend {
+            StudioBlend::Normal => color,
+            StudioBlend::Additive => {
+                Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 0)
+            }
+        }
+    }
+
+    fn draw_studio(&self, painter: &egui::Painter, rect: Rect) {
+        for layer in &self.studio.layers {
+            if !layer.visible || layer.opacity <= 0.0 {
+                continue;
+            }
+            let energy = self.studio_energy(layer.band);
+            let drive = layer.scale * (0.35 + energy * layer.reactivity);
+            match layer.kind {
+                StudioLayerKind::Image => self.draw_studio_image(painter, rect, layer, energy),
+                StudioLayerKind::Waveform => {
+                    self.draw_scope_layer(painter, rect, layer.opacity, layer.blend, drive)
+                }
+                StudioLayerKind::Particles => {
+                    self.draw_particles_layer(painter, rect, layer.opacity, layer.blend, drive)
+                }
+            }
+        }
+    }
+
+    fn draw_studio_image(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        layer: &StudioLayer,
+        energy: f32,
+    ) {
+        let Some(image) = &self.studio.image else {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop a PNG, JPEG, or WebP image to begin",
+                egui::FontId::proportional(20.0),
+                Color32::from_rgb(175, 195, 205),
+            );
+            return;
+        };
+        let source_aspect = image.size[0] as f32 / image.size[1].max(1) as f32;
+        let target_aspect = rect.width() / rect.height().max(1.0);
+        let zoom = (self.interaction.camera_zoom
+            * layer.scale
+            * (1.0 + energy * layer.reactivity * 0.055))
+            .clamp(0.4, 4.0);
+        let (mut uv_width, mut uv_height) = if source_aspect > target_aspect {
+            (target_aspect / source_aspect, 1.0)
+        } else {
+            (1.0, source_aspect / target_aspect)
+        };
+        uv_width = (uv_width / zoom).clamp(0.05, 1.0);
+        uv_height = (uv_height / zoom).clamp(0.05, 1.0);
+        let center = Pos2::new(
+            0.5 + self.interaction.camera_yaw.sin() * 0.08,
+            0.5 + self.interaction.camera_pitch * 0.08,
+        );
+        let uv = Rect::from_center_size(
+            Pos2::new(
+                center.x.clamp(uv_width * 0.5, 1.0 - uv_width * 0.5),
+                center.y.clamp(uv_height * 0.5, 1.0 - uv_height * 0.5),
+            ),
+            Vec2::new(uv_width, uv_height),
+        );
+        let light = (0.82 + energy * layer.reactivity * 0.18).clamp(0.0, 1.0);
+        painter.image(
+            image.texture.id(),
+            rect,
+            uv,
+            Color32::from_rgba_unmultiplied(
+                (255.0 * light) as u8,
+                (255.0 * light) as u8,
+                (255.0 * light) as u8,
+                (255.0 * layer.opacity.clamp(0.0, 1.0)) as u8,
+            ),
+        );
+    }
+
+    fn draw_scope_layer(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        opacity: f32,
+        blend: StudioBlend,
+        drive: f32,
+    ) {
         let center = rect.center();
         for grid in 1..8 {
             let x = egui::lerp(rect.left()..=rect.right(), grid as f32 / 8.0);
             painter.line_segment(
                 [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                Stroke::new(1.0, self.colors.mid.gamma_multiply(0.1)),
+                Stroke::new(
+                    1.0,
+                    Self::studio_color(self.colors.mid, opacity * 0.1, blend),
+                ),
             );
         }
         painter.line_segment(
@@ -1895,10 +2023,13 @@ impl VisualizerApp {
                 Pos2::new(rect.left(), center.y),
                 Pos2::new(rect.right(), center.y),
             ],
-            Stroke::new(1.0, self.colors.full.gamma_multiply(0.25)),
+            Stroke::new(
+                1.0,
+                Self::studio_color(self.colors.full, opacity * 0.25, blend),
+            ),
         );
 
-        let amplitude = rect.height() * 0.32 * self.gain;
+        let amplitude = rect.height() * 0.32 * self.gain * drive;
         let history = if self.visual_history.waveforms.is_empty() {
             vec![self.features.waveform.as_slice()]
         } else {
@@ -1911,10 +2042,11 @@ impl VisualizerApp {
         for (trail, waveform) in history.iter().enumerate() {
             let age = (trail + 1) as f32 / history.len() as f32;
             let points = waveform_points(waveform, rect, center.y, amplitude);
-            let color = self
-                .colors
-                .spectrum_color(age)
-                .gamma_multiply(0.12 + age * 0.5);
+            let color = Self::studio_color(
+                self.colors.spectrum_color(age),
+                opacity * (0.12 + age * 0.5),
+                blend,
+            );
             painter.add(egui::Shape::line(
                 points,
                 Stroke::new(0.7 + age * 1.2, color),
@@ -1933,18 +2065,27 @@ impl VisualizerApp {
             points.clone(),
             Stroke::new(
                 13.0 + self.features.onset * 8.0,
-                self.colors
-                    .full
-                    .gamma_multiply(0.05 + self.colors.glow * 0.04),
+                Self::studio_color(
+                    self.colors.full,
+                    opacity * (0.05 + self.colors.glow * 0.04),
+                    blend,
+                ),
             ),
         ));
         painter.add(egui::Shape::line(
             points,
-            Stroke::new(2.0, self.colors.full),
+            Stroke::new(2.0, Self::studio_color(self.colors.full, opacity, blend)),
         ));
     }
 
-    fn draw_particles(&self, painter: &egui::Painter, rect: Rect) {
+    fn draw_particles_layer(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        opacity: f32,
+        blend: StudioBlend,
+        drive: f32,
+    ) {
         let time = self.started.elapsed().as_secs_f32();
         let center = rect.center() + Vec2::new(0.0, rect.height() * 0.035);
         let scale = rect.size().min_elem();
@@ -1963,16 +2104,17 @@ impl VisualizerApp {
             let time_offset = (1.0 - age) * 0.22;
             for (index, energy) in spectrum.iter().enumerate() {
                 let frequency = index as f32 / (spectrum.len() - 1) as f32;
-                let value = (energy * self.gain).clamp(0.0, 1.0);
+                let value = (energy * self.gain * drive).clamp(0.0, 1.0);
                 let angle = std::f32::consts::TAU * frequency - std::f32::consts::FRAC_PI_2
                     + time * (0.035 + value * 0.12)
                     - time_offset;
                 let radius = scale * (0.15 + frequency.powf(0.72) * 0.27 + value * 0.31);
                 let point = center + Vec2::new(angle.cos() * radius, angle.sin() * radius * 0.78);
-                let color = self
-                    .colors
-                    .spectrum_color(frequency)
-                    .gamma_multiply(0.12 + age * 0.7);
+                let color = Self::studio_color(
+                    self.colors.spectrum_color(frequency),
+                    opacity * (0.12 + age * 0.7),
+                    blend,
+                );
                 painter.circle_filled(point, 0.7 + age * (1.0 + value * 3.8), color);
                 if trail + 1 == spectra.len() {
                     current_points.push((point, color, value));
@@ -1989,21 +2131,31 @@ impl VisualizerApp {
             if index % 4 == 0 {
                 painter.line_segment(
                     [center, point],
-                    Stroke::new(0.7, color.gamma_multiply(0.13 + value * 0.12)),
+                    Stroke::new(
+                        0.7,
+                        Self::studio_color(color, opacity * (0.13 + value * 0.12), blend),
+                    ),
                 );
             }
         }
-        let core =
-            scale * (0.035 + self.features.low * self.gain * 0.055 + self.features.onset * 0.012);
+        let core = scale
+            * (0.035 + self.features.low * self.gain * drive * 0.055 + self.features.onset * 0.012);
         painter.circle_filled(
             center,
             core * 1.8,
-            Color32::from_rgba_unmultiplied(90, 60, 255, 18),
+            Self::studio_color(
+                Color32::from_rgb(90, 60, 255),
+                opacity * 18.0 / 255.0,
+                blend,
+            ),
         );
         painter.circle_stroke(
             center,
             core,
-            Stroke::new(1.5 + self.features.peak * 3.0, self.colors.bass),
+            Stroke::new(
+                1.5 + self.features.peak * 3.0,
+                Self::studio_color(self.colors.bass, opacity, blend),
+            ),
         );
     }
 
@@ -2454,13 +2606,143 @@ impl VisualizerApp {
                             .color(Color32::from_rgb(110, 130, 150)),
                         )
                         .on_hover_text(
-                            "Left/Right cycles visuals; 1/2/3 selects one directly; Up/Down changes \
+                            "Left/Right cycles visuals; 1/2/3/4 selects one directly; Up/Down changes \
                              GPU presets; I opens the Instrument Panel; right-click opens the compact \
                              menu; Tab hides the overlay; Escape closes the panel or returns to \
                              windowed mode before exiting.",
                         );
                     });
             });
+    }
+
+    fn draw_studio_controls(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(
+            egui::RichText::new(format!(
+                "STUDIO LAYERS · {}/{}",
+                self.studio.layers.len(),
+                MAX_STUDIO_LAYERS
+            ))
+            .small()
+            .strong()
+            .color(Color32::from_rgb(90, 245, 220)),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Add");
+            for kind in StudioLayerKind::ALL {
+                let unavailable = self.studio.layers.len() >= MAX_STUDIO_LAYERS
+                    || (kind == StudioLayerKind::Image
+                        && self
+                            .studio
+                            .layers
+                            .iter()
+                            .any(|layer| layer.kind == StudioLayerKind::Image));
+                if ui
+                    .add_enabled(!unavailable, egui::Button::new(kind.label()))
+                    .clicked()
+                {
+                    self.studio.add(kind);
+                }
+            }
+        });
+
+        for (index, layer) in self.studio.layers.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut layer.visible, "");
+                if ui
+                    .selectable_label(self.studio.selected == index, layer.kind.label())
+                    .clicked()
+                {
+                    self.studio.selected = index;
+                }
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {:.0}%",
+                        layer.blend.label(),
+                        layer.opacity * 100.0
+                    ))
+                    .small()
+                    .color(Color32::from_rgb(125, 150, 170)),
+                );
+            });
+        }
+
+        let mut move_layer = 0;
+        let mut remove_layer = false;
+        ui.horizontal(|ui| {
+            if ui.small_button("Up").clicked() {
+                move_layer = -1;
+            }
+            if ui.small_button("Down").clicked() {
+                move_layer = 1;
+            }
+            if ui
+                .add_enabled(self.studio.layers.len() > 1, egui::Button::new("Remove"))
+                .clicked()
+            {
+                remove_layer = true;
+            }
+        });
+        if move_layer != 0 {
+            self.studio.move_selected(move_layer);
+        }
+        if remove_layer {
+            self.studio.remove_selected();
+        }
+
+        if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
+            ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
+            ui.add(egui::Slider::new(&mut layer.reactivity, 0.0..=2.0).text("Reactivity"));
+            ui.add(egui::Slider::new(&mut layer.scale, 0.35..=2.0).text("Scale"));
+            ui.horizontal(|ui| {
+                ui.label("Audio");
+                egui::ComboBox::from_id_salt("studio-band")
+                    .selected_text(layer.band.label())
+                    .show_ui(ui, |ui| {
+                        for band in StudioBand::ALL {
+                            ui.selectable_value(&mut layer.band, band, band.label());
+                        }
+                    });
+                ui.label("Blend");
+                if layer.kind == StudioLayerKind::Image {
+                    layer.blend = StudioBlend::Normal;
+                    ui.label("Normal");
+                } else {
+                    egui::ComboBox::from_id_salt("studio-blend")
+                        .selected_text(layer.blend.label())
+                        .show_ui(ui, |ui| {
+                            for blend in StudioBlend::ALL {
+                                ui.selectable_value(&mut layer.blend, blend, blend.label());
+                            }
+                        });
+                }
+            });
+        }
+
+        if let Some(image) = &self.studio.image {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Image · {} × {} · {}",
+                    image.size[0],
+                    image.size[1],
+                    image.path.display()
+                ))
+                .small()
+                .color(Color32::from_rgb(145, 170, 190)),
+            );
+        }
+        ui.label(
+            egui::RichText::new("Drop a PNG, JPEG, or WebP anywhere on the window to replace it.")
+                .small()
+                .color(Color32::from_rgb(125, 150, 170)),
+        );
+        if let Some(notice) = &self.studio.notice {
+            ui.label(
+                egui::RichText::new(notice)
+                    .small()
+                    .color(Color32::from_rgb(145, 190, 170)),
+            );
+        }
     }
 
     fn draw_instrument_panel(&mut self, ctx: &egui::Context) {
@@ -2480,12 +2762,13 @@ impl VisualizerApp {
                 let mode_name = match self.visual {
                     0 => "Neon Scope".to_owned(),
                     1 => "Particle Forge".to_owned(),
-                    _ => active_id
+                    2 => active_id
                         .and_then(|id| self.presets.iter().find(|preset| preset.id == id))
                         .map_or_else(
                             || "No valid preset".to_owned(),
                             |preset| preset.name.clone(),
                         ),
+                    _ => "Living Photograph".to_owned(),
                 };
                 let mut chosen_visual = None;
                 let mut chosen_preset = None;
@@ -2506,6 +2789,12 @@ impl VisualizerApp {
                                 .clicked()
                             {
                                 chosen_visual = Some(1);
+                            }
+                            if ui
+                                .selectable_label(self.visual == 3, "Studio · Living Photograph")
+                                .clicked()
+                            {
+                                chosen_visual = Some(3);
                             }
                             ui.separator();
                             for (index, preset) in self.presets.iter().enumerate() {
@@ -2529,6 +2818,19 @@ impl VisualizerApp {
                     self.load_preset(index);
                 }
 
+                if self.visual == 3 {
+                    self.draw_studio_controls(ui);
+                }
+
+                if self.visual == 3 {
+                    ui.label(
+                        egui::RichText::new(
+                            "Studio composition saving follows after this rendering slice is validated.",
+                        )
+                        .small()
+                        .color(Color32::from_rgb(125, 150, 170)),
+                    );
+                } else {
                 let mut save_scene = false;
                 let mut refresh_scenes = false;
                 let mut restore_selected_scene = false;
@@ -2607,6 +2909,7 @@ impl VisualizerApp {
                 }
                 if restore_selected_scene {
                     self.restore_scene(self.selected_scene);
+                }
                 }
 
                 ui.separator();
@@ -3344,6 +3647,19 @@ impl eframe::App for VisualizerApp {
         self.pace_frame();
         self.frame_stats.observe(Instant::now());
         self.keyboard(ctx);
+        for dropped in ctx.input(|input| input.raw.dropped_files.clone()) {
+            let result = dropped.path.as_deref().map_or_else(
+                || Err("Only desktop file drops are supported.".to_owned()),
+                |path| self.studio.load_image(ctx, path),
+            );
+            match result {
+                Ok(()) => {
+                    self.visual = 3;
+                    self.instrument_panel = true;
+                }
+                Err(error) => self.studio.notice = Some(error),
+            }
+        }
         self.update_default_device();
         self.update_features();
         self.update_plugin();
@@ -3370,6 +3686,20 @@ impl eframe::App for VisualizerApp {
         }
         if self.instrument_panel {
             self.draw_instrument_panel(ui.ctx());
+        }
+        if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
+            ui.painter().rect_filled(
+                rect.shrink(rect.width().min(rect.height()) * 0.12),
+                12.0,
+                Color32::from_black_alpha(205),
+            );
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "DROP IMAGE INTO STUDIO",
+                egui::FontId::proportional(24.0),
+                Color32::from_rgb(90, 245, 220),
+            );
         }
     }
 
@@ -3525,6 +3855,10 @@ fn preset_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PRESETS", "presets")
 }
 
+fn asset_directory() -> PathBuf {
+    resource_directory("THEVISUALIZER_ASSETS", "assets")
+}
+
 fn plugin_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PLUGINS", "plugins")
 }
@@ -3640,7 +3974,7 @@ mod tests {
         assert_eq!(visual_index_for_key(eframe::egui::Key::Num1), Some(0));
         assert_eq!(visual_index_for_key(eframe::egui::Key::Num2), Some(1));
         assert_eq!(visual_index_for_key(eframe::egui::Key::Num3), Some(2));
-        assert_eq!(visual_index_for_key(eframe::egui::Key::Num4), None);
+        assert_eq!(visual_index_for_key(eframe::egui::Key::Num4), Some(3));
     }
 
     #[test]

@@ -22,7 +22,7 @@ The host exposes five fixed-size bind-group entries:
 
 - binding 0: the original 32-byte uniform contract containing resolution, time, response gain, low/mid/high energy, and RMS
 - binding 1: a fixed read-only storage buffer containing 256 waveform values followed by 64 spectrum values
-- binding 2: a 16-byte uniform containing frame delta, peak, waveform length, and spectrum length
+- binding 2: a 32-byte uniform whose original frame delta, peak, waveform length, and spectrum length fields are followed by onset, transient intensity, and reserved padding
 - binding 3: 96 read-only scene floats containing camera state, up to eight normalized sound zones, routed colors, and material values
 - binding 4: 40 read-only finite mode-parameter floats in metadata order
 

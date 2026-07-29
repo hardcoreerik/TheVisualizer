@@ -53,13 +53,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $presetPath = Join-Path $stagePath "presets"
+$assetPath = Join-Path $stagePath "assets"
 $pluginPath = Join-Path $stagePath "plugins"
 $sdkPath = Join-Path $stagePath "plugin-sdk"
 $docsPath = Join-Path $stagePath "docs"
-New-Item -ItemType Directory -Path $presetPath, $pluginPath, (Join-Path $sdkPath "include"), $docsPath -Force | Out-Null
+New-Item -ItemType Directory -Path $presetPath, $assetPath, $pluginPath, (Join-Path $sdkPath "include"), $docsPath -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer.exe") -Destination $stagePath
 Copy-Item -Path (Join-Path $repoRoot "presets\*.tvpreset") -Destination $presetPath
+Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse.png") -Destination $assetPath
+Copy-Item -LiteralPath (Join-Path $repoRoot "assets\README.md") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer_example_plugin.dll") -Destination $pluginPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\README.md") -Destination $sdkPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\include\thevisualizer_plugin.h") -Destination (Join-Path $sdkPath "include")
@@ -104,6 +107,8 @@ a signed installer or a public release.
 
 $required = @(
     "thevisualizer.exe",
+    "assets\living-photograph-greenhouse.png",
+    "assets\README.md",
     "plugins\example.tvplugin",
     "plugins\thevisualizer_example_plugin.dll",
     "plugin-sdk\README.md",

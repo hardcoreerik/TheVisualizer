@@ -59,6 +59,29 @@ The 35 sliders are grouped under Audio, Camera and navigation, Buildings and str
 
 The scene is procedural. It does not currently use downloaded city photography, recognizable landmarks, generated image assets, or true polygonal 3D geometry. Its host-owned state can be saved in the same `.tvscene` format as every other mode.
 
+## Studio prototype
+
+The development tree adds an unvalidated fourth visual, `Studio · Living Photograph`. It composites a bounded stack of up to eight host-painted Image, Waveform, and Particles layers. Each layer can be hidden, reordered, removed, scaled, assigned Full/Bass/Mid/Treble routing, and given bounded opacity and reactivity. Waveform and particle layers offer Normal or Add blending. The image layer uses Normal blending and accepts local PNG, JPEG, or WebP files by native desktop drag and drop.
+
+The first composition bundles one original photorealistic rainy-greenhouse image. Audio applies restrained exposure and crop movement to that image while the existing waveform and particle instruments render above it. The decoder rejects files over 64 MiB, images over 8192 pixels on either edge, and decoding allocations over 256 MiB. Studio composition persistence, GPU-preset layers, offscreen effects, and image generation inside the player are not implemented.
+
+### Ten next studio modes
+
+These are planned directions, not shipped modes:
+
+| Mode | Photoreal image role | Interaction |
+| --- | --- | --- |
+| Living Photograph | ordinary place becomes subtly alive | drag crop, wheel zoom, route layers by band |
+| Storm Window | rain-streaked room or vehicle glass | move the storm focus; bass drives distant lightning |
+| Liquid Memory | submerged archival photograph | stir refraction and reveal buried details |
+| Fracture Room | believable interior behind cracked glass | drag an impact point; transients grow fractures |
+| Botanical Macro | extreme-detail plant and water study | attract pollen and droplets with the pointer |
+| Crowd Pulse | real concert or street crowd plate | place energy zones across the crowd |
+| Orbital Diorama | photographed practical miniature | orbit, zoom, and disturb dust or debris |
+| Neon X-Ray | photographic subject with spectral overlays | scrub between material and energy layers |
+| Kinetic Collage | cut photographic fragments and paper | grab, scatter, and regroup image shards |
+| Volumetric Cathedral | realistic monumental interior | steer shafts, particles, and echoing wavefronts |
+
 ## Saved scene format
 
 Each `.tvscene` file is a bounded, versioned UTF-8 snapshot. It records identity for the required host mode or preset plus exactly the state the host already owns: response, forty bounded parameter slots, five routed colors, palette/material values, camera state, and up to eight sound zones. Restoring a scene first selects its mode, rejects a missing preset, clamps values to the current preset metadata, and only then replaces the active interaction state.

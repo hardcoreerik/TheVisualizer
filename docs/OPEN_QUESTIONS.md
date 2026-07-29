@@ -23,6 +23,8 @@ Resolve these questions with official documentation, focused code spikes, measur
 - How do `winit`, `wgpu`, and `egui` behave across resize, sleep/wake, HDR, mixed-DPI monitors, and fullscreen changes?
 - Should fullscreen target the current monitor or a user-selected monitor in v0.1?
 - Do Display, 60 FPS, and 30 FPS remain the right choices after representative GPU board-power, thermal, and battery measurements?
+- Does the bounded Studio stack remain readable and responsive across image aspect ratios, minimum window size, fullscreen, and representative music before composition persistence is added?
+- Which offscreen blend or effect earns implementation after direct Normal/Add composition is visually measured?
 
 ## Presets and native plugins
 
