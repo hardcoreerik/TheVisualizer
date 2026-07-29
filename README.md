@@ -19,8 +19,9 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
 - Automatic default-output recovery timing from detection through stream open and first capture packet
 - Eleven bundled modes: Neon Scope, Particle Forge, Cascading Falls, Feedback Tunnel, Solar Bloom, Neon Horizon, Gravity Wells, Ripple Garden, Kaleido Reactor, Aurora Flow, and TheVisualCityScape
-- Up to eight draggable sound zones with independent Full, Bass, Mid, or Treble routing, radius, strength, and pin state; Particle Forge renders each zone as a smaller local forge
-- A visible `Instrument [I]` panel for scene editing plus a separate `Mode [O]` panel for active-visual controls, including Particle Forge direction reversal and gradient shifting
+- Up to eight shared sound zones plus sixteen Particle Forge 3D force nodes with independent band routing, Emit/Attract/Repel/Spin/Vortex behavior, radius, strength, falloff, axis, depth, and pin state
+- A visible `Instrument [I]` panel for scene editing, `Mode [O]` for active-visual controls, and `Forge [F]` for the selected 3D force node
+- GPU-native Particle Forge compute simulation with 65,536–262,144 XYZ particles, toroidal motion, five topology families, three blendable material treatments, audio modulation routes, fixed quality profiles, and bounded `.glb` mesh attachment
 - Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts
 - A local Visual Director with rolling Visual DNA, structured novelty-scored scene invention, 17 capture choices, controlled photographic imperfections, preflight critique, generation-ready prompts, durable local brief history, and Markdown brief export without making an API request
 - An experimental Studio layer stack for local images, GPU presets, waveform, and particles, with one original photorealistic `Living Photograph`, bounded real foliage motion, and an optional three-region 2.5D foliage rig

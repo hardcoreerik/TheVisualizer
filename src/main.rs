@@ -1,5 +1,6 @@
 mod analysis;
 mod audio;
+mod forge_model;
 mod particle_forge;
 mod plugin;
 mod preset;
@@ -19,6 +20,7 @@ use analysis::{Analyzer, FFT_SIZE, Features};
 use audio::{AudioCapture, AudioDevice, SampleBuffer, SharedSamples, SourceKind};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
+use forge_model::ForgeModel;
 use particle_forge::{
     ForgeForceKind, ForgeFrame, ForgeQuality, ForgeSceneSource, ForgeTopology,
     ParticleForgeRenderer, ParticleForgeState,
@@ -1195,6 +1197,7 @@ impl VisualizerApp {
                 })
                 .collect(),
             parameters: self.mode_parameters,
+            forge_state: (self.visual == 1).then(|| self.particle_forge.encode_scene()),
         })
     }
 
@@ -1230,6 +1233,28 @@ impl VisualizerApp {
             return;
         };
         let snapshot = saved.snapshot;
+        let restored_forge = if snapshot.mode_id == "host.particle-forge" {
+            Some(
+                snapshot
+                    .forge_state
+                    .as_deref()
+                    .map_or_else(
+                        || Ok(ParticleForgeState::default()),
+                        ParticleForgeState::decode_scene,
+                    )
+                    .map_err(|error| {
+                        self.scene_notice = Some(format!("Invalid Particle Forge scene: {error}"));
+                    }),
+            )
+        } else {
+            None
+        };
+        if restored_forge
+            .as_ref()
+            .is_some_and(|result| result.is_err())
+        {
+            return;
+        }
         match snapshot.mode_id.as_str() {
             "host.neon-scope" => self.visual = 0,
             "host.particle-forge" => self.visual = 1,
@@ -1308,6 +1333,14 @@ impl VisualizerApp {
             camera_zoom: snapshot.camera_zoom,
             show_handles: snapshot.show_handles,
         };
+        if let Some(Ok(forge)) = restored_forge {
+            self.particle_forge = forge;
+            if let (Some(renderer), Some(model)) =
+                (&self.particle_forge_renderer, &self.particle_forge.model)
+            {
+                renderer.upload_model(model);
+            }
+        }
         self.scene_notice = Some(format!(
             "Restored scene · {} · {}",
             snapshot.name, snapshot.mode_name
@@ -1509,10 +1542,18 @@ impl VisualizerApp {
             self.switch_default_source(SourceKind::System);
         }
         if delete {
-            self.interaction.remove_selected();
+            if self.visual == 1 {
+                self.particle_forge.remove_selected();
+            } else {
+                self.interaction.remove_selected();
+            }
         }
         if reset {
-            self.reset_interaction();
+            if self.visual == 1 {
+                self.particle_forge.reset();
+            } else {
+                self.reset_interaction();
+            }
         }
         if revert {
             self.revert_all(ctx);
@@ -1720,6 +1761,10 @@ impl VisualizerApp {
                     self.particle_forge.camera_yaw,
                     self.particle_forge.camera_pitch,
                 ]);
+            if self.particle_forge.camera_drag_origin.is_some() {
+                self.particle_forge.camera_override_until =
+                    self.started.elapsed().as_secs_f32() + 2.0;
+            }
         }
         if response.dragged_by(egui::PointerButton::Primary)
             || response.drag_stopped_by(egui::PointerButton::Primary)
@@ -1738,6 +1783,8 @@ impl VisualizerApp {
             } else if let Some(origin) = self.particle_forge.camera_drag_origin {
                 self.particle_forge.camera_yaw = origin[0] - delta.x * 0.008;
                 self.particle_forge.camera_pitch = (origin[1] + delta.y * 0.004).clamp(-1.2, 1.2);
+                self.particle_forge.camera_override_until =
+                    self.started.elapsed().as_secs_f32() + 2.0;
             }
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) {
@@ -1934,6 +1981,9 @@ impl VisualizerApp {
     }
 
     fn draw_forge_handles(&self, painter: &egui::Painter, rect: Rect) {
+        if !self.interaction.show_handles {
+            return;
+        }
         for (index, node) in self.particle_forge.nodes.iter().enumerate() {
             let center = forge_node_position(rect, node.position);
             let selected = self.particle_forge.selected == Some(index);
@@ -3188,7 +3238,7 @@ impl VisualizerApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "<-/-> visual · Up/Down preset · I instrument · L labels · Shift+R revert · Tab · Esc",
+                                "<-/-> visual · Up/Down preset · I instrument · O mode · F forge · L labels · Shift+R revert · Tab · Esc",
                             )
                             .small()
                             .color(Color32::from_rgb(110, 130, 150)),
@@ -3543,6 +3593,18 @@ impl VisualizerApp {
                 egui::Slider::new(&mut self.particle_forge.materials.cosmic, 0.0..=1.0)
                     .text("Cosmic"),
             );
+            if self.particle_forge.source != ForgeSceneSource::Procedural
+                && self.particle_forge.model.is_none()
+            {
+                ui.label("Drop a bounded `.glb` model to activate this source.");
+            }
+            if let Some(notice) = &self.particle_forge.model_notice {
+                ui.label(
+                    egui::RichText::new(notice)
+                        .small()
+                        .color(Color32::from_rgb(145, 190, 170)),
+                );
+            }
         }
     }
 
@@ -3624,10 +3686,8 @@ impl VisualizerApp {
                         .add_enabled(!node.pinned, egui::Button::new("Remove node"))
                         .clicked();
                 }
-                if remove && let Some(index) = self.particle_forge.selected {
-                    self.particle_forge.nodes.remove(index);
-                    self.particle_forge.selected = (!self.particle_forge.nodes.is_empty())
-                        .then(|| index.min(self.particle_forge.nodes.len() - 1));
+                if remove {
+                    self.particle_forge.remove_selected();
                 }
                 ui.separator();
                 egui::CollapsingHeader::new(format!(
@@ -3757,7 +3817,9 @@ impl VisualizerApp {
                     }
                 });
                 ui.label(
-                    egui::RichText::new(if self.visual == 3 {
+                    egui::RichText::new(if self.visual == 1 {
+                        "Canvas · left-drag a node to move it · empty-space drag orbits · Shift+wheel moves depth · right-drag tunes"
+                    } else if self.visual == 3 {
                         "Canvas · right-click toggles the selected layer · right-drag adjusts its scale/reactivity"
                     } else {
                         "Canvas · right-click empty adds a zone · right-click a zone cycles its band · right-drag tunes"
@@ -4214,6 +4276,18 @@ impl VisualizerApp {
                 }
                 self.visual_director_panel = director_open;
 
+                if self.visual == 1 {
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "3D Force Nodes · {}/{}",
+                            self.particle_forge.nodes.len(),
+                            particle_forge::MAX_FORGE_NODES
+                        ));
+                        if ui.button("Open Forge [F]").clicked() {
+                            self.forge_panel = true;
+                        }
+                    });
+                } else {
                 egui::CollapsingHeader::new(format!(
                     "Sound Zones · {}/{}",
                     self.interaction.zones.len(),
@@ -4303,6 +4377,7 @@ impl VisualizerApp {
                         self.interaction.remove_selected();
                     }
                 });
+                }
 
                 egui::CollapsingHeader::new("Colors & Materials")
                     .id_salt("instrument-colors")
@@ -4395,7 +4470,14 @@ impl VisualizerApp {
                                 .text("Zoom")
                                 .fixed_decimals(2),
                         );
-                        ui.checkbox(&mut self.interaction.show_handles, "Show zone handles");
+                        ui.checkbox(
+                            &mut self.interaction.show_handles,
+                            if self.visual == 1 {
+                                "Show force-node handles"
+                            } else {
+                                "Show zone handles"
+                            },
+                        );
                         if ui.button("Reset interaction").clicked() {
                             self.reset_interaction();
                         }
@@ -4403,9 +4485,11 @@ impl VisualizerApp {
 
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(
-                        "Left-drag zones · left-drag empty space to orbit · wheel zooms · R resets interaction",
-                    )
+                    egui::RichText::new(if self.visual == 1 {
+                        "Left-drag nodes · empty-space drag orbits · Shift+wheel changes node depth · R resets Forge"
+                    } else {
+                        "Left-drag zones · left-drag empty space to orbit · wheel zooms · R resets interaction"
+                    })
                     .small()
                     .color(Color32::from_rgb(110, 145, 165)),
                 );
@@ -4525,6 +4609,32 @@ impl eframe::App for VisualizerApp {
         self.frame_stats.observe(Instant::now());
         self.keyboard(ctx);
         for dropped in ctx.input(|input| input.raw.dropped_files.clone()) {
+            if let Some(path) = dropped.path.as_deref()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+            {
+                match ForgeModel::load(path) {
+                    Ok(model) => {
+                        if let Some(renderer) = &self.particle_forge_renderer {
+                            renderer.upload_model(&model);
+                        }
+                        self.particle_forge.model_notice = Some(format!(
+                            "Loaded {} meshes · {} skins · {} animations · {} attachment points",
+                            model.mesh_count,
+                            model.skin_count,
+                            model.animation_count,
+                            model.points.len()
+                        ));
+                        self.particle_forge.model = Some(model);
+                        self.particle_forge.source = ForgeSceneSource::Hybrid;
+                        self.visual = 1;
+                        self.forge_panel = true;
+                    }
+                    Err(error) => self.particle_forge.model_notice = Some(error),
+                }
+                continue;
+            }
             let result = dropped.path.as_deref().map_or_else(
                 || Err("Only desktop file drops are supported.".to_owned()),
                 |path| self.studio.load_image(ctx, path),

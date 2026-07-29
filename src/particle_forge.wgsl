@@ -25,6 +25,7 @@ struct Colors {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read_write> simulated_particles: array<Particle>;
 @group(0) @binding(2) var<storage, read> nodes: array<Node>;
+@group(0) @binding(3) var<storage, read> model_points: array<vec4<f32>>;
 @group(1) @binding(0) var<uniform> render_uniforms: Uniforms;
 @group(1) @binding(1) var<storage, read> rendered_particles: array<Particle>;
 @group(1) @binding(2) var<storage, read> render_nodes: array<Node>;
@@ -130,6 +131,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let event = uniforms.values[6].w;
     velocity += normalize(position + vec3<f32>(0.001)) * event * dt * 4.0;
+    let source = uniforms.values[7].x;
+    let model_count = u32(uniforms.values[7].y);
+    if source > 0.5 && model_count > 0u {
+        let model_target = model_points[index % model_count].xyz;
+        let model_scale = 1.4 / max(length(model_target), 1.0);
+        let attachment = model_target * model_scale;
+        velocity += (attachment - position) * dt * select(0.45, 1.2, source > 1.5);
+    }
     let max_speed = 1.8 + uniforms.values[1].w * 2.0;
     velocity = clamp(length(velocity), 0.0, max_speed) * normalize(velocity + vec3<f32>(0.0001));
     velocity *= pow(0.985, dt * 60.0);
@@ -151,7 +160,7 @@ fn rotate_y(point: vec3<f32>, angle: f32) -> vec3<f32> {
 }
 
 fn project(point: vec3<f32>) -> vec4<f32> {
-    let yaw = render_uniforms.values[5].w + sin(render_uniforms.values[0].z * 0.07) * render_uniforms.values[4].w * 0.18;
+    let yaw = render_uniforms.values[5].w + sin(render_uniforms.values[0].z * 0.07) * render_uniforms.values[7].w * 0.18;
     let pitch = render_uniforms.values[6].x;
     let zoom = max(render_uniforms.values[6].y, 0.35);
     let camera = rotate_x(rotate_y(point, yaw), pitch);

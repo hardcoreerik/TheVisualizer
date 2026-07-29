@@ -40,6 +40,7 @@ pub struct SceneSnapshot {
     pub selected_zone: Option<usize>,
     pub zones: Vec<SceneZone>,
     pub parameters: [f32; SCENE_PARAMETER_COUNT],
+    pub forge_state: Option<String>,
 }
 
 #[derive(Clone)]
@@ -156,7 +157,7 @@ fn encode(snapshot: &SceneSnapshot) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let mut source = format!(
-        "format=1\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
+        "format=2\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
          palette={}\nfinish={}\ncolors={colors}\nmaterial={},{},{}\n\
          camera={},{},{}\nshow_handles={}\nselected_zone={}\nparameters={parameters}\n",
         snapshot.saved_at_ms,
@@ -186,6 +187,9 @@ fn encode(snapshot: &SceneSnapshot) -> String {
             u8::from(zone.pinned)
         ));
     }
+    if let Some(forge_state) = &snapshot.forge_state {
+        source.push_str(&format!("forge_state={}\n", hex_encode(forge_state)));
+    }
     source
 }
 
@@ -205,6 +209,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
     let mut selected_zone = None;
     let mut parameters = None;
     let mut zones = Vec::new();
+    let mut forge_state = None;
     for line in source.lines().filter(|line| !line.trim().is_empty()) {
         let (key, value) = line
             .split_once('=')
@@ -230,6 +235,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
                     key,
                 )?;
             }
+            "forge_state" => set_once(&mut forge_state, hex_decode(value)?, key)?,
             "zone" => {
                 if zones.len() == SCENE_ZONE_LIMIT {
                     return Err(format!("scene exceeds {SCENE_ZONE_LIMIT} zones"));
@@ -250,7 +256,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
             _ => return Err(format!("unknown scene key `{key}`")),
         }
     }
-    if format != Some(1) {
+    if !matches!(format, Some(1 | 2)) {
         return Err("unsupported or missing scene format".to_owned());
     }
     let material = material.ok_or_else(|| "missing `material`".to_owned())?;
@@ -275,6 +281,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
         selected_zone: (selected >= 0).then_some(selected as usize),
         zones,
         parameters: parameters.ok_or_else(|| "missing `parameters`".to_owned())?,
+        forge_state,
     };
     validate(&snapshot)?;
     Ok(snapshot)
@@ -325,6 +332,13 @@ fn validate(snapshot: &SceneSnapshot) -> Result<(), String> {
     }
     if snapshot.parameters.iter().any(|value| !value.is_finite()) {
         return Err("scene parameters must be finite".to_owned());
+    }
+    if snapshot
+        .forge_state
+        .as_ref()
+        .is_some_and(|state| state.len() > 16 * 1024 || !state.is_ascii())
+    {
+        return Err("forge state is invalid or oversized".to_owned());
     }
     Ok(())
 }
@@ -448,6 +462,7 @@ mod tests {
                 pinned: true,
             }],
             parameters: [0.5; SCENE_PARAMETER_COUNT],
+            forge_state: None,
         }
     }
 
@@ -477,5 +492,12 @@ mod tests {
         invalid = snapshot();
         invalid.selected_zone = Some(5);
         assert!(validate(&invalid).is_err());
+    }
+
+    #[test]
+    fn format_one_scene_migrates_without_forge_state() {
+        let legacy = encode(&snapshot()).replacen("format=2", "format=1", 1);
+        let restored = decode(&legacy).expect("decode legacy scene");
+        assert!(restored.forge_state.is_none());
     }
 }

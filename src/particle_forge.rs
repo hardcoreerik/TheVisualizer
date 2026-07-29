@@ -1,5 +1,6 @@
 use std::mem::size_of;
 
+use crate::forge_model::ForgeModel;
 use eframe::{
     egui,
     egui_wgpu::{
@@ -11,6 +12,7 @@ use eframe::{
 pub const MAX_FORGE_NODES: usize = 16;
 pub const MAX_FORGE_ROUTES: usize = 24;
 const MAX_PARTICLES: u32 = 262_144;
+const MAX_MODEL_POINTS: usize = 500_000;
 const PARTICLE_FLOATS: usize = 16;
 const NODE_FLOATS: usize = 16;
 const UNIFORM_FLOATS: usize = 32;
@@ -51,6 +53,22 @@ impl ForgeQuality {
             Self::Unlimited => None,
         }
     }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Fps60 => 0,
+            Self::Fps90 => 1,
+            Self::Fps120 => 2,
+            Self::Unlimited => 3,
+        }
+    }
+
+    fn from_code(code: u8) -> Result<Self, String> {
+        Self::ALL
+            .get(code as usize)
+            .copied()
+            .ok_or_else(|| "invalid forge quality".to_owned())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +108,13 @@ impl ForgeTopology {
             Self::Core => 4.0,
         }
     }
+
+    fn from_code(code: u8) -> Result<Self, String> {
+        Self::ALL
+            .get(code as usize)
+            .copied()
+            .ok_or_else(|| "invalid forge topology".to_owned())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +133,21 @@ impl ForgeSceneSource {
             Self::Hybrid => "Hybrid",
             Self::Model => "Model",
         }
+    }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Procedural => 0,
+            Self::Hybrid => 1,
+            Self::Model => 2,
+        }
+    }
+
+    fn from_code(code: u8) -> Result<Self, String> {
+        Self::ALL
+            .get(code as usize)
+            .copied()
+            .ok_or_else(|| "invalid forge scene source".to_owned())
     }
 }
 
@@ -147,6 +187,13 @@ impl ForgeForceKind {
             Self::Spin => 3.0,
             Self::Vortex => 4.0,
         }
+    }
+
+    fn from_code(code: u8) -> Result<Self, String> {
+        Self::ALL
+            .get(code as usize)
+            .copied()
+            .ok_or_else(|| "invalid forge force kind".to_owned())
     }
 }
 
@@ -216,6 +263,7 @@ pub struct ParticleForgeState {
     pub camera_pitch: f32,
     pub camera_zoom: f32,
     pub auto_camera: bool,
+    pub camera_override_until: f32,
     pub gizmo: bool,
     pub reverse: bool,
     pub gradient_shift: f32,
@@ -223,6 +271,8 @@ pub struct ParticleForgeState {
     pub nodes: Vec<ForgeNode>,
     pub selected: Option<usize>,
     pub routes: Vec<ForgeModRoute>,
+    pub model: Option<ForgeModel>,
+    pub model_notice: Option<String>,
     pub drag_origin: Option<[f32; 3]>,
     pub camera_drag_origin: Option<[f32; 2]>,
     pub secondary_drag_origin: Option<[f32; 2]>,
@@ -243,6 +293,7 @@ impl Default for ParticleForgeState {
             camera_pitch: 0.12,
             camera_zoom: 1.0,
             auto_camera: true,
+            camera_override_until: 0.0,
             gizmo: false,
             reverse: false,
             gradient_shift: 0.0,
@@ -250,6 +301,8 @@ impl Default for ParticleForgeState {
             nodes: vec![ForgeNode::default()],
             selected: Some(0),
             routes: Vec::new(),
+            model: None,
+            model_notice: None,
             drag_origin: None,
             camera_drag_origin: None,
             secondary_drag_origin: None,
@@ -273,6 +326,18 @@ impl ParticleForgeState {
         *self = Self::default();
     }
 
+    pub fn remove_selected(&mut self) {
+        let Some(index) = self.selected else {
+            return;
+        };
+        if self.nodes.get(index).is_none_or(|node| node.pinned) {
+            return;
+        }
+        self.nodes.remove(index);
+        self.selected =
+            (!self.nodes.is_empty()).then(|| index.min(self.nodes.len().saturating_sub(1)));
+    }
+
     pub fn apply_modulation(&mut self, sources: [f32; 6]) {
         for route in self.routes.iter().filter(|route| route.enabled) {
             let value = sources
@@ -294,6 +359,208 @@ impl ParticleForgeState {
             }
         }
     }
+
+    pub fn encode_scene(&self) -> String {
+        let selected = self.selected.map_or(-1, |index| index as i32);
+        let mut output = format!(
+            "state={},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            self.quality.code(),
+            self.source.code(),
+            self.topology.code() as u8,
+            self.topology_morph,
+            self.spin[0],
+            self.spin[1],
+            self.spin[2],
+            self.twist,
+            self.precession,
+            self.materials.energy,
+            self.materials.cyber,
+            self.materials.cosmic,
+            self.camera_yaw,
+            self.camera_pitch,
+            self.camera_zoom,
+            u8::from(self.auto_camera),
+            u8::from(self.gizmo),
+            u8::from(self.reverse),
+            self.gradient_shift,
+            selected,
+        );
+        for node in self.nodes.iter().take(MAX_FORGE_NODES) {
+            output.push_str(&format!(
+                "node={},{},{},{},{},{},{},{},{},{},{},{}\n",
+                node.position[0],
+                node.position[1],
+                node.position[2],
+                node.radius,
+                node.strength,
+                node.falloff,
+                node.spin_axis[0],
+                node.spin_axis[1],
+                node.spin_axis[2],
+                node.band,
+                node.kind.code() as u8,
+                u8::from(node.pinned),
+            ));
+        }
+        for route in self.routes.iter().take(MAX_FORGE_ROUTES) {
+            output.push_str(&format!(
+                "route={},{},{},{}\n",
+                route.source,
+                route.target,
+                route.amount,
+                u8::from(route.enabled),
+            ));
+        }
+        if let Some(model) = &self.model {
+            output.push_str(&format!(
+                "model={}\n",
+                model
+                    .path
+                    .to_string_lossy()
+                    .bytes()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<String>()
+            ));
+        }
+        output
+    }
+
+    pub fn decode_scene(source: &str) -> Result<Self, String> {
+        if source.len() > 16 * 1024 {
+            return Err("forge state is oversized".to_owned());
+        }
+        let mut state_values = None;
+        let mut nodes = Vec::new();
+        let mut routes = Vec::new();
+        let mut model_path = None;
+        for line in source.lines().filter(|line| !line.is_empty()) {
+            let (key, value) = line
+                .split_once('=')
+                .ok_or_else(|| "invalid forge state line".to_owned())?;
+            let values = value.split(',').collect::<Vec<_>>();
+            match key {
+                "state" if state_values.is_none() && values.len() == 20 => {
+                    state_values = Some(values);
+                }
+                "node" if values.len() == 12 && nodes.len() < MAX_FORGE_NODES => {
+                    nodes.push(ForgeNode {
+                        position: [parse(values[0])?, parse(values[1])?, parse(values[2])?],
+                        radius: parse_range(values[3], 0.08, 1.5)?,
+                        strength: parse_range(values[4], 0.0, 3.0)?,
+                        falloff: parse_range(values[5], 0.25, 4.0)?,
+                        spin_axis: [parse(values[6])?, parse(values[7])?, parse(values[8])?],
+                        band: parse_range::<u8>(values[9], 0, 3)?,
+                        kind: ForgeForceKind::from_code(parse(values[10])?)?,
+                        pinned: parse_bool(values[11])?,
+                    });
+                }
+                "route" if values.len() == 4 && routes.len() < MAX_FORGE_ROUTES => {
+                    routes.push(ForgeModRoute {
+                        source: parse_range(values[0], 0, 5)?,
+                        target: parse_range(values[1], 0, 7)?,
+                        amount: parse_range(values[2], -2.0, 2.0)?,
+                        enabled: parse_bool(values[3])?,
+                    });
+                }
+                "model" if model_path.is_none() && value.len().is_multiple_of(2) => {
+                    let bytes = value
+                        .as_bytes()
+                        .chunks_exact(2)
+                        .map(|pair| {
+                            let pair = std::str::from_utf8(pair).ok()?;
+                            u8::from_str_radix(pair, 16).ok()
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| "invalid forge model path".to_owned())?;
+                    model_path = Some(
+                        String::from_utf8(bytes)
+                            .map_err(|_| "forge model path is not UTF-8".to_owned())?,
+                    );
+                }
+                _ => return Err(format!("invalid or duplicate forge state key `{key}`")),
+            }
+        }
+        let values = state_values.ok_or_else(|| "missing forge state".to_owned())?;
+        let selected: i32 = parse(values[19])?;
+        let mut state = Self {
+            quality: ForgeQuality::from_code(parse(values[0])?)?,
+            source: ForgeSceneSource::from_code(parse(values[1])?)?,
+            topology: ForgeTopology::from_code(parse(values[2])?)?,
+            topology_morph: parse_range(values[3], 0.0, 1.0)?,
+            spin: [
+                parse_range(values[4], -1.5, 1.5)?,
+                parse_range(values[5], -1.5, 1.5)?,
+                parse_range(values[6], -1.5, 1.5)?,
+            ],
+            twist: parse_range(values[7], 0.0, 2.0)?,
+            precession: parse_range(values[8], 0.0, 1.0)?,
+            materials: ForgeMaterialMix {
+                energy: parse_range(values[9], 0.0, 1.0)?,
+                cyber: parse_range(values[10], 0.0, 1.0)?,
+                cosmic: parse_range(values[11], 0.0, 1.0)?,
+            },
+            camera_yaw: parse_range(values[12], -std::f32::consts::TAU, std::f32::consts::TAU)?,
+            camera_pitch: parse_range(values[13], -1.2, 1.2)?,
+            camera_zoom: parse_range(values[14], 0.35, 3.0)?,
+            auto_camera: parse_bool(values[15])?,
+            camera_override_until: 0.0,
+            gizmo: parse_bool(values[16])?,
+            reverse: parse_bool(values[17])?,
+            gradient_shift: parse_range(values[18], 0.0, 1.0)?,
+            event_envelope: 0.0,
+            nodes,
+            selected: (selected >= 0).then_some(selected as usize),
+            routes,
+            model: None,
+            model_notice: None,
+            drag_origin: None,
+            camera_drag_origin: None,
+            secondary_drag_origin: None,
+        };
+        if state.nodes.is_empty() {
+            state.nodes.push(ForgeNode::default());
+            state.selected = Some(0);
+        }
+        if state
+            .selected
+            .is_some_and(|index| index >= state.nodes.len())
+        {
+            return Err("selected forge node does not exist".to_owned());
+        }
+        if let Some(path) = model_path {
+            match ForgeModel::load(std::path::Path::new(&path)) {
+                Ok(model) => state.model = Some(model),
+                Err(error) => state.model_notice = Some(error),
+            }
+        }
+        Ok(state)
+    }
+}
+
+fn parse<T: std::str::FromStr>(value: &str) -> Result<T, String> {
+    value
+        .parse()
+        .map_err(|_| format!("invalid forge value `{value}`"))
+}
+
+fn parse_range<T>(value: &str, minimum: T, maximum: T) -> Result<T, String>
+where
+    T: std::str::FromStr + PartialOrd + Copy,
+{
+    let parsed = parse(value)?;
+    if parsed >= minimum && parsed <= maximum {
+        Ok(parsed)
+    } else {
+        Err(format!("forge value `{value}` is out of range"))
+    }
+}
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err("forge boolean must be 0 or 1".to_owned()),
+    }
 }
 
 pub struct ForgeFrame<'a> {
@@ -311,6 +578,7 @@ pub struct ForgeFrame<'a> {
 }
 
 pub struct ParticleForgeRenderer {
+    state: egui_wgpu::RenderState,
     adapter_name: String,
 }
 
@@ -319,12 +587,29 @@ impl ParticleForgeRenderer {
         let resources = create_resources(state)?;
         state.renderer.write().callback_resources.insert(resources);
         Ok(Self {
+            state: state.clone(),
             adapter_name: state.adapter.get_info().name,
         })
     }
 
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    pub fn upload_model(&self, model: &ForgeModel) {
+        if let Some(resources) = self
+            .state
+            .renderer
+            .write()
+            .callback_resources
+            .get::<ForgeResources>()
+        {
+            self.state.queue.write_buffer(
+                &resources.model_points,
+                0,
+                bytemuck::cast_slice(&model.points),
+            );
+        }
     }
 
     pub fn paint(&self, painter: &egui::Painter, rect: egui::Rect, frame: ForgeFrame<'_>) {
@@ -381,10 +666,13 @@ impl ParticleForgeRenderer {
             state.camera_zoom,
             state.gradient_shift,
             state.event_envelope,
+            state.source.code() as f32,
+            state
+                .model
+                .as_ref()
+                .map_or(0.0, |model| model.points.len() as f32),
             0.0,
-            0.0,
-            0.0,
-            0.0,
+            f32::from(state.auto_camera && frame.time >= state.camera_override_until),
         ];
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
@@ -425,6 +713,12 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 MAX_FORGE_NODES * NODE_FLOATS,
+            ),
+            buffer_entry(
+                3,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                MAX_MODEL_POINTS * 4,
             ),
         ],
     });
@@ -523,6 +817,12 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
         contents: bytemuck::cast_slice(&[0.0_f32; MAX_FORGE_NODES * NODE_FLOATS]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
     });
+    let model_points = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Particle Forge model points"),
+        size: (MAX_MODEL_POINTS * 4 * size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
     let colors = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Particle Forge colors"),
         contents: bytemuck::cast_slice(&[0.0_f32; 12]),
@@ -543,6 +843,10 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: nodes.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: model_points.as_entire_binding(),
             },
         ],
     });
@@ -579,6 +883,7 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
         uniforms,
         nodes,
         colors,
+        model_points,
     })
 }
 
@@ -653,6 +958,7 @@ struct ForgeResources {
     uniforms: wgpu::Buffer,
     nodes: wgpu::Buffer,
     colors: wgpu::Buffer,
+    model_points: wgpu::Buffer,
 }
 
 #[cfg(test)]
@@ -677,6 +983,18 @@ mod tests {
     }
 
     #[test]
+    fn selected_pinned_node_cannot_be_removed() {
+        let mut state = ParticleForgeState::default();
+        state.nodes[0].pinned = true;
+        state.remove_selected();
+        assert_eq!(state.nodes.len(), 1);
+        state.nodes[0].pinned = false;
+        state.remove_selected();
+        assert!(state.nodes.is_empty());
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
     fn modulation_routes_are_bounded_at_the_target() {
         let mut state = ParticleForgeState::default();
         state.routes.push(ForgeModRoute {
@@ -687,5 +1005,21 @@ mod tests {
         });
         state.apply_modulation([1.0; 6]);
         assert_eq!(state.spin[0], 1.5);
+    }
+
+    #[test]
+    fn forge_scene_state_round_trips() {
+        let mut state = ParticleForgeState::default();
+        state.add_node([1.0, -0.5, 0.75]);
+        state.routes.push(ForgeModRoute {
+            source: 2,
+            target: 6,
+            amount: -0.4,
+            enabled: true,
+        });
+        let restored = ParticleForgeState::decode_scene(&state.encode_scene()).unwrap();
+        assert_eq!(restored.nodes.len(), 2);
+        assert_eq!(restored.routes.len(), 1);
+        assert_eq!(restored.nodes[1].position, [1.0, -0.5, 0.75]);
     }
 }
