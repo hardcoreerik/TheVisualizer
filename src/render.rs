@@ -1,4 +1,4 @@
-use std::num::NonZeroU64;
+use std::{collections::VecDeque, num::NonZeroU64};
 
 use eframe::{
     egui,
@@ -13,6 +13,8 @@ use crate::preset::Preset;
 
 const AUDIO_FEATURE_FLOATS: usize = WAVEFORM_POINTS + SPECTRUM_BANDS;
 const FRAME_EXTRAS_FLOATS: usize = 8;
+pub const PRESET_HISTORY_ROWS: usize = 128;
+const PRESET_HISTORY_FLOATS: usize = PRESET_HISTORY_ROWS * SPECTRUM_BANDS;
 pub const PRESET_SCENE_FLOATS: usize = 96;
 pub const PRESET_PARAMETER_FLOATS: usize = 40;
 
@@ -30,6 +32,7 @@ pub struct PresetFrame<'a> {
     pub peak: f32,
     pub onset: f32,
     pub transient: f32,
+    pub spectrum_history: &'a VecDeque<Vec<f32>>,
     pub scene: &'a [f32],
     pub parameters: &'a [f32],
 }
@@ -56,8 +59,8 @@ impl PresetFrame<'_> {
             self.spectrum.len() as f32,
             self.onset,
             self.transient,
-            0.0,
-            0.0,
+            self.spectrum_history.len().min(PRESET_HISTORY_ROWS) as f32,
+            SPECTRUM_BANDS as f32,
         ]
     }
 
@@ -83,6 +86,22 @@ impl PresetFrame<'_> {
         let length = self.parameters.len().min(PRESET_PARAMETER_FLOATS);
         parameters[..length].copy_from_slice(&self.parameters[..length]);
         parameters
+    }
+
+    fn spectrum_history_state(self) -> [f32; PRESET_HISTORY_FLOATS] {
+        let mut history = [0.0; PRESET_HISTORY_FLOATS];
+        for (row, spectrum) in self
+            .spectrum_history
+            .iter()
+            .rev()
+            .take(PRESET_HISTORY_ROWS)
+            .enumerate()
+        {
+            let length = spectrum.len().min(SPECTRUM_BANDS);
+            let start = row * SPECTRUM_BANDS;
+            history[start..start + length].copy_from_slice(&spectrum[..length]);
+        }
+        history
     }
 }
 
@@ -131,6 +150,7 @@ impl GpuPresetRenderer {
                 audio_features: frame.audio_features(),
                 scene: frame.scene_state(),
                 parameters: frame.parameter_state(),
+                spectrum_history: frame.spectrum_history_state(),
             },
         ));
     }
@@ -207,6 +227,18 @@ fn create_resources(
                 },
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(
+                        (PRESET_HISTORY_FLOATS * size_of::<f32>()) as u64,
+                    ),
+                },
+                count: None,
+            },
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -260,6 +292,11 @@ fn create_resources(
         contents: bytemuck::cast_slice(&[0.0_f32; PRESET_PARAMETER_FLOATS]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
     });
+    let spectrum_history_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("TheVisualizer preset spectrum-history buffer"),
+        contents: bytemuck::cast_slice(&[0.0_f32; PRESET_HISTORY_FLOATS]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+    });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("TheVisualizer preset bind group"),
         layout: &bind_group_layout,
@@ -284,6 +321,10 @@ fn create_resources(
                 binding: 4,
                 resource: parameter_buffer.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: spectrum_history_buffer.as_entire_binding(),
+            },
         ],
     });
     if let Some(error) = pollster::block_on(error_scope.pop()) {
@@ -302,6 +343,7 @@ fn create_resources(
         extras_buffer,
         scene_buffer,
         parameter_buffer,
+        spectrum_history_buffer,
     })
 }
 
@@ -329,6 +371,7 @@ struct PresetCallback {
     audio_features: [f32; AUDIO_FEATURE_FLOATS],
     scene: [f32; PRESET_SCENE_FLOATS],
     parameters: [f32; PRESET_PARAMETER_FLOATS],
+    spectrum_history: [f32; PRESET_HISTORY_FLOATS],
 }
 
 impl egui_wgpu::CallbackTrait for PresetCallback {
@@ -369,6 +412,11 @@ impl egui_wgpu::CallbackTrait for PresetCallback {
                 0,
                 bytemuck::cast_slice(&self.parameters),
             );
+            queue.write_buffer(
+                &resources.spectrum_history_buffer,
+                0,
+                bytemuck::cast_slice(&self.spectrum_history),
+            );
         }
         Vec::new()
     }
@@ -395,6 +443,7 @@ struct PresetResources {
     extras_buffer: wgpu::Buffer,
     scene_buffer: wgpu::Buffer,
     parameter_buffer: wgpu::Buffer,
+    spectrum_history_buffer: wgpu::Buffer,
 }
 
 #[cfg(test)]
@@ -416,6 +465,7 @@ mod tests {
             peak: 0.9,
             onset: 1.0,
             transient: 0.7,
+            spectrum_history: &VecDeque::from([vec![0.25, 0.5]]),
             scene: &[7.0, 8.0],
             parameters: &[9.0],
         };
@@ -423,11 +473,12 @@ mod tests {
             frame.uniforms([1920, 1080]),
             [1920.0, 1080.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
         );
-        assert_eq!(frame.extras(), [0.016, 0.9, 2.0, 1.0, 1.0, 0.7, 0.0, 0.0]);
+        assert_eq!(frame.extras(), [0.016, 0.9, 2.0, 1.0, 1.0, 0.7, 1.0, 64.0]);
         let audio = frame.audio_features();
         assert_eq!(&audio[..3], &[0.25, -0.5, 0.0]);
         assert_eq!(audio[WAVEFORM_POINTS], 0.75);
         assert_eq!(&frame.scene_state()[..3], &[7.0, 8.0, 0.0]);
         assert_eq!(&frame.parameter_state()[..2], &[9.0, 0.0]);
+        assert_eq!(&frame.spectrum_history_state()[..3], &[0.25, 0.5, 0.0]);
     }
 }

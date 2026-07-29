@@ -1,0 +1,131 @@
+//! format: 2
+//! id: thevisualizer.cascading-falls
+//! name: Cascading Falls
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Power|noise-floor|Noise Floor|0.0|0.8|0.08
+//! parameter: Power|contrast|Contrast|0.5|5.0|1.5
+//! parameter: Power|gamma|Gamma|0.3|3.0|0.85
+//! parameter: Spectrum|trace-height|Trace Height|0.12|0.48|0.28
+//! parameter: Spectrum|trace-width|Trace Width|0.5|5.0|1.6
+//! parameter: Grid|grid-opacity|Grid Opacity|0.0|1.0|0.32
+//! parameter: Color|palette-shift|Palette Shift|-1.0|1.0|0.0
+//! parameter: Waterfall|history-depth|History Depth|0.25|1.0|1.0
+//! parameter: Spectrum|peak-glow|Peak Glow|0.0|3.0|1.0
+//! parameter: Frequency|frequency-warp|Frequency Warp|0.45|2.5|1.0
+//! parameter: Surface|exposure|Exposure|0.2|3.0|0.75
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+
+struct FrameExtras {
+    delta: f32,
+    peak: f32,
+    waveform_len: f32,
+    spectrum_len: f32,
+    onset: f32,
+    transient: f32,
+    history_rows: f32,
+    history_bands: f32,
+}
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+struct SpectrumHistory { values: array<f32, 8192> }
+@group(0) @binding(5) var<storage, read> history: SpectrumHistory;
+
+fn signal_level(energy: f32) -> f32 {
+    let floor = controls.values[1];
+    let normalized = clamp(
+        (energy * uniforms.gain * controls.values[11] - floor) / max(1.0 - floor, 0.001),
+        0.0,
+        1.0,
+    );
+    return pow(
+        clamp(normalized * controls.values[2], 0.0, 1.0),
+        max(controls.values[3], 0.05),
+    );
+}
+
+fn cyber_palette(level: f32) -> vec3f {
+    let colors = array(
+        vec3f(0.0, 0.004, 0.04),
+        vec3f(0.08, 0.0, 0.28),
+        vec3f(0.10, 0.08, 0.73),
+        vec3f(0.0, 0.75, 1.0),
+        vec3f(0.78, 0.08, 1.0),
+        vec3f(1.0, 0.10, 0.58),
+        vec3f(1.0),
+    );
+    let scaled = clamp(level + controls.values[7] * 0.08, 0.0, 1.0) * 6.0;
+    let index = min(u32(floor(scaled)), 5u);
+    return mix(colors[index], colors[index + 1u], fract(scaled));
+}
+
+fn grid_axis(value: f32, divisions: f32, width: f32) -> f32 {
+    let cell = fract(value * divisions);
+    return 1.0 - smoothstep(0.0, width, min(cell, 1.0 - cell));
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let vertices = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(vertices[index], 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let uv = position.xy / max(uniforms.resolution, vec2f(1.0));
+    let header = controls.values[4];
+    let frequency_phase = clamp(abs(uv.x - 0.5) * 2.0, 0.0, 1.0);
+    let warped = pow(frequency_phase, controls.values[10]);
+    let source = min(u32(round(warped * 63.0)), 63u);
+    let grid_strength = controls.values[6];
+    let vertical_grid = grid_axis(uv.x, 12.0, 0.012) * grid_strength;
+    let beat = clamp(extras.transient * 2.0 + extras.onset, 0.0, 1.0);
+    var color = vec3f(0.0, 0.003, 0.018);
+
+    if uv.y < header {
+        let level = signal_level(features.spectrum[source]);
+        let trace_y = 1.0 - uv.y / max(header, 0.001);
+        let distance = abs(trace_y - level);
+        let pixel = controls.values[5] / max(uniforms.resolution.y * header, 1.0);
+        let glow = 1.0 - smoothstep(0.0, pixel * (5.0 + controls.values[9] * 6.0), distance);
+        let core = 1.0 - smoothstep(0.0, pixel * 1.5, distance);
+        let horizontal_grid = grid_axis(uv.y / header, 4.0, 0.018) * grid_strength;
+        color += vec3f(0.0, 0.20, 0.30) * (vertical_grid + horizontal_grid);
+        color += vec3f(1.0, 0.0, 0.75) * glow * 0.42;
+        color += vec3f(0.20, 0.95, 1.0) * core * 1.4;
+    } else {
+        let rows = max(u32(extras.history_rows), 1u);
+        let visible_rows = max(u32(f32(rows) * controls.values[8]), 1u);
+        let history_y = clamp((uv.y - header) / max(1.0 - header, 0.001), 0.0, 0.99999);
+        let row = min(u32(floor(history_y * f32(visible_rows))), rows - 1u);
+        let energy = history.values[row * 64u + source];
+        color = cyber_palette(signal_level(energy));
+        let horizontal_grid = grid_axis(history_y, 8.0, 0.009) * grid_strength;
+        color += vec3f(0.20, 0.0, 0.34) * horizontal_grid;
+        color += vec3f(0.0, 0.16, 0.22) * vertical_grid;
+    }
+
+    let seam_distance = abs(uv.x - 0.5);
+    let seam_glow = 1.0 - smoothstep(0.0, 0.006 + beat * 0.012, seam_distance);
+    let seam_core = 1.0 - smoothstep(0.0, 0.0008, seam_distance);
+    color += mix(vec3f(1.0, 0.0, 0.72), vec3f(0.0, 0.95, 1.0), beat)
+        * seam_glow * (0.35 + beat * 0.7);
+    color += vec3f(0.75, 1.0, 1.0) * seam_core;
+
+    let divider = 1.0 - smoothstep(0.0, 0.0015, abs(uv.y - header));
+    color += vec3f(0.0, 0.75, 1.0) * divider;
+    return vec4f(color, 1.0);
+}

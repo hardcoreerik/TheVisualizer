@@ -289,7 +289,7 @@ mod tests {
 
         let bundled = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/presets")));
         assert!(bundled.errors.is_empty(), "{:?}", bundled.errors);
-        assert_eq!(bundled.presets.len(), 8);
+        assert_eq!(bundled.presets.len(), 9);
         let city = bundled
             .presets
             .iter()

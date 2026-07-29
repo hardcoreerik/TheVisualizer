@@ -8,7 +8,7 @@ The first release target is Windows desktop. The intended experience is simple: 
 
 ## Project status
 
-TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, ten audio-reactive modes, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Eight modes are declarative WGSL presets with grouped sliders; the two host-rendered modes provide waveform trails and frequency-ordered particles. An experimental Studio can layer those visual families with local images. A portable local-test Windows package containing Studio has passed a same-host fresh-extraction smoke, while clean-machine validation remains open. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
+TheVisualizer now has a Windows desktop prototype with live system-audio loopback, microphone capture, FFT analysis, eleven audio-reactive modes, draggable sound zones, routed colors/materials, named saved scenes, a compact overlay, and windowed, borderless, and fullscreen presentation. Nine modes are WGSL presets with grouped sliders, including Cascading Falls with persistent spectrum history. The remaining two host-rendered modes provide waveform trails and frequency-ordered particles. An experimental Studio can layer those visual families with local images. A portable local-test Windows package containing Studio has passed a same-host fresh-extraction smoke, while clean-machine validation remains open. Public releases, additional platforms, and embedded support remain unimplemented. See [Project Truth](PROJECT_TRUTH.md) for exact runtime evidence and the [Roadmap](ROADMAP.md) for planned work.
 
 ## Current prototype
 
@@ -18,7 +18,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Waveform, spectrum, energy, and frequency-band analysis
 - Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
 - Automatic default-output recovery timing from detection through stream open and first capture packet
-- Ten bundled modes: Neon Scope, Particle Forge, Feedback Tunnel, Solar Bloom, Neon Horizon, Gravity Wells, Ripple Garden, Kaleido Reactor, Aurora Flow, and TheVisualCityScape
+- Eleven bundled modes: Neon Scope, Particle Forge, Cascading Falls, Feedback Tunnel, Solar Bloom, Neon Horizon, Gravity Wells, Ripple Garden, Kaleido Reactor, Aurora Flow, and TheVisualCityScape
 - Up to eight draggable sound zones with independent Full, Bass, Mid, or Treble routing, radius, strength, and pin state
 - A visible `Instrument [I]` panel and matching right-click menu for mode selection, live band meters, grouped per-mode sliders, sound zones, seven palettes, five material finishes, per-band colors, and gradient controls for glow, gloss, and saturation
 - Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts

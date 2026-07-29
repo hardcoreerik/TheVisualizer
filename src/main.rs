@@ -20,7 +20,10 @@ use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
 use plugin::{LoadedPlugin, PluginPackage};
 use preset::Preset;
-use render::{GpuPresetRenderer, PRESET_PARAMETER_FLOATS, PRESET_SCENE_FLOATS, PresetFrame};
+use render::{
+    GpuPresetRenderer, PRESET_HISTORY_ROWS, PRESET_PARAMETER_FLOATS, PRESET_SCENE_FLOATS,
+    PresetFrame,
+};
 use scene::{SavedScene, SceneSnapshot, SceneZone};
 use studio::{
     MAX_STUDIO_LAYERS, StudioBand, StudioBlend, StudioLayer, StudioLayerKind, StudioState,
@@ -515,6 +518,8 @@ impl VisualHistory {
         self.spectra.push_back(self.smoothed_spectrum.clone());
         while self.waveforms.len() > VISUAL_TRAIL_FRAMES {
             self.waveforms.pop_front();
+        }
+        while self.spectra.len() > PRESET_HISTORY_ROWS {
             self.spectra.pop_front();
         }
     }
@@ -1951,9 +1956,38 @@ impl VisualizerApp {
                 peak: self.features.peak,
                 onset: self.features.onset,
                 transient: self.features.transient,
+                spectrum_history: &self.visual_history.spectra,
                 scene: &scene,
                 parameters: &parameters,
             },
+        );
+        if renderer.active_id() == "thevisualizer.cascading-falls" {
+            self.draw_waterfall_labels(painter, rect);
+        }
+    }
+
+    fn draw_waterfall_labels(&self, painter: &egui::Painter, rect: Rect) {
+        let sample_rate = self
+            .capture
+            .as_ref()
+            .map_or(48_000.0, |capture| capture.sample_rate as f32);
+        painter.text(
+            rect.left_top() + Vec2::new(10.0, 8.0),
+            egui::Align2::LEFT_TOP,
+            "CASCADING FALLS // DUAL-SPECTRUM WATERFALL",
+            egui::FontId::monospace(12.0),
+            Color32::from_rgb(130, 225, 245),
+        );
+        painter.text(
+            rect.right_top() + Vec2::new(-10.0, 8.0),
+            egui::Align2::RIGHT_TOP,
+            format!(
+                "{:.1} kHz  ←  0 Hz  →  {:.1} kHz · TIME ↓",
+                sample_rate / 2_000.0,
+                sample_rate / 2_000.0
+            ),
+            egui::FontId::monospace(11.0),
+            Color32::from_rgb(90, 150, 165),
         );
     }
 
@@ -2414,6 +2448,9 @@ impl VisualizerApp {
             self.visual_history
                 .spectra
                 .iter()
+                .rev()
+                .take(VISUAL_TRAIL_FRAMES)
+                .rev()
                 .map(Vec::as_slice)
                 .collect()
         };
@@ -4454,11 +4491,11 @@ mod tests {
         assert!(history.smoothed_spectrum[0] > 0.0);
         assert!(history.smoothed_spectrum[0] < 0.8);
 
-        for sequence in 3..20 {
+        for sequence in 3..=super::PRESET_HISTORY_ROWS as u64 + 2 {
             history.update(sequence, &features);
         }
         assert_eq!(history.waveforms.len(), super::VISUAL_TRAIL_FRAMES);
-        assert_eq!(history.spectra.len(), super::VISUAL_TRAIL_FRAMES);
+        assert_eq!(history.spectra.len(), super::PRESET_HISTORY_ROWS);
     }
 
     #[test]
