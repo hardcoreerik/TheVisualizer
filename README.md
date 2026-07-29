@@ -28,7 +28,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - An experimental ten-layer Studio for local images, animated WebP, GPU presets, waveform, and particles, with a bounded media bin, position/mirror/opacity controls, one original photorealistic `Living Photograph`, real foliage motion, and an optional three-region 2.5D foliage rig
 - A persistent Performance Studio with two independently tunable GPU-preset decks, scene search/favorites, a live crossfader, ten transition curves, ten reusable macros, audio envelopes, speed/hue/level controls, freeze, mute, blackout, MIDI mapping, and localhost OSC control
 - Local `.tvpreset` discovery, format-2 grouped parameters, safe live reload, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and last-working-shader retention
-- A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
+- Backward-compatible native plugin ABIs: the response-only v1 example plus an ABI-v2 Creative Suite with eight selectable profiles, 24 bounded host-owned modulation routes, beat/take events, and eight MIDI/localhost-OSC input lanes
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
 - A repository-owned waveform mark embedded as the native application/window icon
 - Display-synchronized, 60 FPS, and 30 FPS pacing choices with measured application cadence
@@ -42,6 +42,8 @@ Install a current Rust toolchain, then run:
 cargo build --workspace
 cargo run -p thevisualizer
 ```
+
+The workspace build produces both the ABI-v1 example DLL and the shared ABI-v2 Creative Suite DLL used by eight plugin manifests.
 
 The workspace build also produces the example native-plugin DLL. The prototype starts in automatic mode on the default Windows output device and follows later default changes. Choosing a specific endpoint from the device menu pins it until `S` returns to automatic system output or `M` returns to automatic microphone input. Refresh rescans devices, Left/Right cycles visual directions, `1`/`2`/`3`/`4` selects one directly, Up/Down switches GPU presets, `L` toggles the Visual Library, `H` hides visual labels, `I` toggles Instrument, `O` toggles Mode Controls, `F` opens Forge Node for Particle Forge or Color Focus elsewhere, `P` toggles Performance Studio, `Shift+R` reverts session changes, `B` toggles borderless presentation, `F11` toggles fullscreen, and `Tab` hides the overlay. Instrument owns scene editing, including manual hue shift and automatic bidirectional color phasing; Mode Controls owns active-visual specifics. Left-drag a zone to move it, left-drag empty space to rotate supported scenes, and use the wheel to zoom. Right-click never opens a menu: empty space adds a zone, a zone click cycles its audio band, and right-drag adjusts the target directly; in Studio those gestures act on the layer selected in Instrument. `R` resets interaction only. `Escape` closes an open control panel first, then returns to windowed mode before closing the app.
 
@@ -89,4 +91,4 @@ Performance Studio can receive MIDI CC/note mappings and localhost OSC messages 
 
 ## License
 
-TheVisualizer's original code, documentation, original WGSL presets, plugin SDK, and example plugin are licensed under the [Apache License 2.0](LICENSE). Eight modified ISF adaptations are MIT-licensed with pinned artifact-level provenance; see [ISF Imports](docs/ISF_IMPORTS.md). No MilkDrop/projectM code or unlabeled community presets are included. Future compatibility assets require explicit provenance; see [Licensing](docs/LICENSING.md).
+TheVisualizer's original code, documentation, original WGSL presets, plugin SDK, ABI-v1 example plugin, and ABI-v2 Creative Suite are licensed under the [Apache License 2.0](LICENSE). Eight modified ISF adaptations are MIT-licensed with pinned artifact-level provenance; see [ISF Imports](docs/ISF_IMPORTS.md). No MilkDrop/projectM code or unlabeled community presets are included. Future compatibility assets require explicit provenance; see [Licensing](docs/LICENSING.md).

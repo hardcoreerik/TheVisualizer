@@ -64,26 +64,34 @@ Copy-Item -Path (Join-Path $repoRoot "presets\*.tvpreset") -Destination $presetP
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse.png") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse-motion.webp") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\README.md") -Destination $assetPath
-Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer_example_plugin.dll") -Destination $pluginPath
+foreach ($library in @(
+    "thevisualizer_example_plugin.dll",
+    "thevisualizer_creative_suite_plugin.dll"
+)) {
+    Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\$library") -Destination $pluginPath
+}
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\README.md") -Destination $sdkPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "plugin-sdk\include\thevisualizer_plugin.h") -Destination (Join-Path $sdkPath "include")
 Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stagePath
 Copy-Item -LiteralPath (Join-Path $repoRoot "NOTICE") -Destination $stagePath
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\LICENSING.md") -Destination $docsPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\ISF_IMPORTS.md") -Destination $docsPath
-New-Item -ItemType Directory -Path (Join-Path $stagePath "third-party\isf-files") -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $repoRoot "third-party\isf-files\LICENSE") `
-    -Destination (Join-Path $stagePath "third-party\isf-files")
 & (Join-Path $repoRoot "scripts\collect-third-party-licenses.ps1") `
     -Target "x86_64-pc-windows-msvc" `
     -Destination (Join-Path $stagePath "third-party")
+New-Item -ItemType Directory -Path (Join-Path $stagePath "third-party\isf-files") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "third-party\isf-files\LICENSE") `
+    -Destination (Join-Path $stagePath "third-party\isf-files")
 
-$pluginManifest = Get-Content -LiteralPath (Join-Path $repoRoot "plugins\example.tvplugin") -Raw
-$pluginManifest = $pluginManifest -replace '(?m)^library=.*$', 'library=thevisualizer_example_plugin.dll'
-if ($pluginManifest -notmatch '(?m)^library=thevisualizer_example_plugin\.dll$') {
-    throw "Could not stage the package-relative plugin library path."
+Get-ChildItem -LiteralPath (Join-Path $repoRoot "plugins") -Filter "*.tvplugin" -File |
+ForEach-Object {
+    $pluginManifest = Get-Content -LiteralPath $_.FullName -Raw
+    $pluginManifest = $pluginManifest -replace '(?m)^library=.*/([^/\\]+)$', 'library=$1'
+    if ($pluginManifest -notmatch '(?m)^library=[^/\\]+\.dll$') {
+        throw "Could not stage the package-relative plugin library path for $($_.Name)."
+    }
+    Set-Content -LiteralPath (Join-Path $pluginPath $_.Name) -Value $pluginManifest -NoNewline
 }
-Set-Content -LiteralPath (Join-Path $pluginPath "example.tvplugin") -Value $pluginManifest -NoNewline
 
 @"
 TheVisualizer $($package.version) - Windows x86_64 local test
@@ -94,9 +102,9 @@ up/down for GPU presets, I/O/F/P for instrument panels, B for borderless, F11 fo
 Tab for the overlay, and Escape to return or exit. Canvas clicks and drags directly edit the
 active visual; right-click never opens a duplicate context menu.
 
-The bundled native plugin remains disabled until you review its path and SHA-256 identity and
-select Approve & Load. Native code runs with your user privileges and is not sandboxed.
-Approval lasts only for the current run.
+Bundled native plugins remain disabled until you review a selected path and SHA-256 identity and
+select Approve & Load. Native code runs with your user privileges and is not sandboxed. Only one
+plugin is active at a time, and approval lasts only for the current run.
 
 This is a portable package. Delete the extracted directory to uninstall it.
 TheVisualizer's original work is Apache-2.0; see LICENSE, NOTICE, and docs\LICENSING.md.
@@ -116,8 +124,8 @@ $required = @(
     "assets\living-photograph-greenhouse.png",
     "assets\living-photograph-greenhouse-motion.webp",
     "assets\README.md",
-    "plugins\example.tvplugin",
     "plugins\thevisualizer_example_plugin.dll",
+    "plugins\thevisualizer_creative_suite_plugin.dll",
     "plugin-sdk\README.md",
     "plugin-sdk\include\thevisualizer_plugin.h",
     "LICENSE",
@@ -129,6 +137,8 @@ $required = @(
     "README.txt",
     "LOCAL-TEST-NOTICE.txt"
 )
+$required += Get-ChildItem -LiteralPath (Join-Path $repoRoot "plugins") -Filter "*.tvplugin" -File |
+    ForEach-Object { "plugins\$($_.Name)" }
 $required += Get-ChildItem -LiteralPath (Join-Path $repoRoot "presets") -Filter "*.tvpreset" -File |
     ForEach-Object { "presets\$($_.Name)" }
 foreach ($relativePath in $required) {

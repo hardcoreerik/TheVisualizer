@@ -1,6 +1,6 @@
 [workspace]
-members = ["plugin-sdk", "plugins/example"]
-default-members = [".", "plugins/example"]
+members = ["plugin-sdk", "plugins/example", "plugins/creative-suite"]
+default-members = [".", "plugins/example", "plugins/creative-suite"]
 resolver = "3"
 
 [package]

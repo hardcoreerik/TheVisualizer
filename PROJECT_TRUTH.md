@@ -77,13 +77,14 @@ This document records verified project state. Planned behavior belongs in the [R
 - Ten creative controls and 17 capture choices drive structured subject/environment/era/event/scale/weather/composition/light candidates. Weighted history similarity prioritizes concept novelty over cosmetic variation; two or three plausible photographic imperfections, contextual cliché restraints, a deterministic preflight critique, and a generation-ready prompt follow. A versioned local brief history preserves generation metadata, prompts, and novelty records across app restarts; explicit Markdown export records the full brief, Visual DNA, and preflight scores. It makes no API request.
 - An optional `THEVISUALIZER_GPU` adapter-name override for focused compatibility checks.
 - An optional `THEVISUALIZER_PRESETS` directory override for focused discovery and packaging checks.
-- A shared size-tagged native-plugin ABI v1 with matching Rust definitions and a C header.
+- Shared size-tagged native-plugin ABI v1 and v2 definitions with a matching C header. ABI v1 retains its response-only contract. ABI v2 accepts onset, transient, ten macro values, and eight external controller lanes and emits at most 24 finite commands plus bounded beat/take events.
 - Strict `.tvplugin` manifest discovery for the current platform without loading native code.
 - SHA-256 artifact identity displayed before approval and recomputed immediately before library loading. Approval is explicit and lasts only for the current run.
-- One repository-owned Windows example plugin implementing initialize, synchronous feature processing, bounded response output, and shutdown without receiving audio ownership or GPU/window handles.
+- One repository-owned ABI-v1 Windows example plugin plus eight ABI-v2 Creative Suite profiles backed by one shared DLL: Beat Choreographer, Spectral Colorist, Zone Dancer, Camera Pilot, Particle Conductor, Transition DJ, MIDI Performance Mapper, and Ambient Auto-Director.
+- ABI-v2 commands route only through host-owned bounded setters for response, active-mode parameters, colors, camera, Zone Studio, Particle Forge, Performance Studio, and macros. MIDI CC 20–27 and localhost OSC plugin-input addresses supply eight external lanes. Only one native plugin is active at a time.
 - An optional `THEVISUALIZER_PLUGINS` directory override for focused discovery and packaging checks.
 - A guarded Windows x86_64 packaging script that builds the locked release workspace and stages a portable local-test archive under `dist`.
-- The portable package script stages the player, all seventeen bundled preset files, the example-plugin manifest and DLL, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums.
+- The portable package script stages the player, all bundled preset files, all nine repository plugin manifests, both native-plugin DLLs, C/Rust SDK documentation, project and target-resolved third-party license/provenance files, a package-specific readme, an explicit local-test notice, and SHA-256 checksums.
 - The package script stages the bundled Studio still, animated WebP, and their provenance record.
 - The staged plugin manifest uses a package-relative DLL path; no development-machine path is included in packaged text or manifests.
 - Apache-2.0 project licensing with a canonical `LICENSE`, contributor `NOTICE`, manifest metadata, and a recorded compatibility/provenance policy.
@@ -95,10 +96,11 @@ This document records verified project state. Planned behavior belongs in the [R
 - A repository-owned SVG waveform mark, derived PNG, and embedded native application/window icon. The running app does not depend on an external icon file.
 - Display-synchronized, 60 FPS, and 30 FPS host-side frame pacing selectable beside the measured application cadence in the details disclosure.
 - Visible `1 Scope`, `2 Particles`, `3 Preset`, and `4 Studio` controls with matching number-key selection, Left/Right cycling, and a portable ASCII shortcut footer.
-- Forty-eight focused player tests cover the existing analysis, capture, interaction, Studio, Performance Studio, MIDI/OSC mapping, preset, scene, and Visual Director contracts plus unique Instrument profiles for all twenty-eight visuals, Cargo resource discovery, compilation of every bundled WGSL shader, Particle Forge quality budgets, force-node bounds, modulation clamping, and complete state round-trips. Separate SDK and example-plugin lifecycle tests also pass.
+- Fifty-one focused player tests cover the existing analysis, capture, interaction, Studio, Performance Studio, MIDI/OSC mapping, preset, scene, Visual Director, ABI-v1/v2 plugin discovery/loading, and bounded plugin command contracts plus unique Instrument profiles for all twenty-eight visuals, Cargo resource discovery, compilation of every bundled WGSL shader, Particle Forge quality budgets, force-node bounds, modulation clamping, and complete state round-trips. Separate SDK, ABI-v1 example, and eight-profile Creative Suite lifecycle tests also pass.
 
 ## Runtime-observed results
 
+- On 2026-07-29, `cargo test --workspace` passed 51 player tests plus the SDK, ABI-v1 example, and Creative Suite tests; every one of the nine manifests loaded and processed through its real DLL entry point. Strict workspace Clippy and the optimized workspace build passed. The corrected release packager staged nine package-relative manifests and both DLLs; all 478 recorded payload checksums matched. This is automated ABI/package validation, not live visual acceptance of each plugin profile.
 - On 2026-07-29, fresh preset discovery accepted all seventeen format-2 packages and a wgpu device validation scope compiled every bundled WGSL shader without an error. This is shader-contract validation, not visual or performance acceptance of the eight new scenes.
 - `cargo check --workspace` completed successfully on 2026-07-27.
 - `cargo test --workspace` passed 28 tests with 0 failures on 2026-07-27.
@@ -214,11 +216,11 @@ This document records verified project state. Planned behavior belongs in the [R
 - Automatic preset-directory watching, a preset/editor workflow, non-slider parameter types, scene rename/delete/share UX, or remote preset delivery
 - True polygonal 3D city geometry, downloaded city imagery, recognizable landmark assets, or generated-image scene packs
 - OpenAI or other image-provider requests, image response decoding, saved generated-image history, reference-image editing, automated critique/revision, and generated-asset ingestion
-- Persistent approval records, signed-plugin infrastructure, or cross-process crash isolation
+- Persistent approval records, signed-plugin infrastructure, simultaneous native-plugin chains, or cross-process crash isolation
 - A clean-machine package run, installer, updater, signing, signed executable metadata/resource icon, public distribution, or formal installed-program uninstall
 - macOS or Linux builds and capture backends
 - MilkDrop, projectM, or legacy Winamp compatibility
-- Sensor, telemetry, or broader network input adapters
+- Sensor-specific adapters or broader non-localhost network inputs beyond the eight generic plugin lanes
 - ESP32-class, M5Tab5, or LED-controller support
 
 ## Unverified assumptions

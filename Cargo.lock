@@ -3344,6 +3344,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "thevisualizer-creative-suite-plugin"
+version = "0.1.0"
+dependencies = [
+ "thevisualizer-plugin-sdk",
+]
+
+[[package]]
 name = "thevisualizer-example-plugin"
 version = "0.1.0"
 dependencies = [

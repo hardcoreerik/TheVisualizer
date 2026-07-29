@@ -32,6 +32,8 @@ An experimental Studio slice now adds a bounded Image/GPU Preset/Waveform/Partic
 
 The development tree now also includes a persistent Performance Studio: two independently tunable WGSL decks, full-frame GPU A/B mixing, scene search/favorites, ten transitions and audio-modulated macros, a ten-layer image/animated-WebP media stack, safe preset live reload, and bounded MIDI plus localhost OSC control. Host modes remain take-only. MP4/video/webcam input, ISF import, spatial transition masks, and external video output remain open.
 
+Native extensions now retain the response-only ABI v1 while adding ABI v2 with 24 bounded host-owned command routes, beat/take events, ten macro inputs, and eight MIDI/localhost-OSC telemetry lanes. One shared Creative Suite DLL supplies eight selectable plugin profiles. Automated ABI, lifecycle, routing, manifest, release-build, package, and checksum validation passed; live behavior and performance acceptance remain open.
+
 ## Milestone 2 — Windows audio foundation
 
 - Select the active output loopback or microphone source. Explicit selections remain pinned.

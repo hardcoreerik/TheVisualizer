@@ -21,6 +21,7 @@ pub enum ControlEvent {
     Blackout(bool),
     LiveMix(bool),
     Take(usize),
+    PluginInput(usize, f32),
 }
 
 type EventQueue = Arc<Mutex<VecDeque<ControlEvent>>>;
@@ -228,6 +229,7 @@ fn midi_event(message: &[u8]) -> Option<ControlEvent> {
                 10 => Some(ControlEvent::Crossfader(value)),
                 11 => Some(ControlEvent::Blackout(value >= 0.5)),
                 12 => Some(ControlEvent::LiveMix(value >= 0.5)),
+                20..=27 => Some(ControlEvent::PluginInput((*control - 20) as usize, value)),
                 _ => None,
             }
         }
@@ -264,6 +266,14 @@ fn osc_event(message: &OscMessage) -> Option<ControlEvent> {
         .filter(|index| (1..=10).contains(index))
     {
         return Some(ControlEvent::Macro(index - 1, value?));
+    }
+    if let Some(index) = message
+        .addr
+        .strip_prefix("/thevisualizer/plugin/input/")
+        .and_then(|index| index.parse::<usize>().ok())
+        .filter(|index| (1..=8).contains(index))
+    {
+        return Some(ControlEvent::PluginInput(index - 1, value?));
     }
     match message.addr.as_str() {
         "/thevisualizer/crossfader" => Some(ControlEvent::Crossfader(value?)),
@@ -308,11 +318,22 @@ mod tests {
         );
         assert_eq!(midi_event(&[0x90, 36, 100]), Some(ControlEvent::Take(0)));
         assert_eq!(
+            midi_event(&[0xb0, 20, 127]),
+            Some(ControlEvent::PluginInput(0, 1.0))
+        );
+        assert_eq!(
             osc_event(&OscMessage {
                 addr: "/thevisualizer/crossfader".to_owned(),
                 args: vec![OscType::Float(1.4)],
             }),
             Some(ControlEvent::Crossfader(1.0))
+        );
+        assert_eq!(
+            osc_event(&OscMessage {
+                addr: "/thevisualizer/plugin/input/8".to_owned(),
+                args: vec![OscType::Float(0.25)],
+            }),
+            Some(ControlEvent::PluginInput(7, 0.25))
         );
     }
 }

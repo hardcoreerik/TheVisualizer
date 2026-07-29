@@ -39,6 +39,11 @@ use scene::{SavedScene, SceneSnapshot, SceneZone};
 use studio::{
     MAX_STUDIO_LAYERS, StudioBand, StudioBlend, StudioLayer, StudioLayerKind, StudioState,
 };
+use thevisualizer_plugin_sdk::{
+    EVENT_BEAT, EVENT_TAKE_A, EVENT_TAKE_B, OP_ADD, OP_MULTIPLY, PluginCommandV2, TARGET_CAMERA,
+    TARGET_COLOR, TARGET_FORGE, TARGET_MACRO, TARGET_MODE_PARAMETER, TARGET_PERFORMANCE,
+    TARGET_RESPONSE, TARGET_ZONE,
+};
 use visual_director::{Aspect, CaptureProfile, OutputIntent, VisualDirector};
 
 const VISUAL_NAMES: [&str; 4] = ["NEON SCOPE", "PARTICLE FORGE", "GPU PRESET", "STUDIO"];
@@ -872,6 +877,8 @@ struct VisualizerApp {
     loaded_plugin: Option<LoadedPlugin>,
     plugin_error: Option<String>,
     plugin_multiplier: f32,
+    plugin_command_count: usize,
+    plugin_inputs: [f32; 8],
     last_plugin_frame: Instant,
     cityscape_initialized: bool,
     visual_director: VisualDirector,
@@ -1044,6 +1051,8 @@ impl VisualizerApp {
             loaded_plugin: None,
             plugin_error,
             plugin_multiplier: 1.0,
+            plugin_command_count: 0,
+            plugin_inputs: [0.0; 8],
             last_plugin_frame: started,
             cityscape_initialized: false,
             visual_director: VisualDirector::with_default_history(),
@@ -1543,6 +1552,7 @@ impl VisualizerApp {
     fn refresh_plugins(&mut self) {
         self.loaded_plugin = None;
         self.plugin_multiplier = 1.0;
+        self.plugin_command_count = 0;
         let discovery = plugin::discover(&self.plugin_directory);
         self.plugins = discovery.packages;
         self.selected_plugin = self
@@ -1552,10 +1562,13 @@ impl VisualizerApp {
     }
 
     fn approve_plugin(&mut self) {
-        let Some(package) = self.plugins.get(self.selected_plugin) else {
+        let Some(package) = self.plugins.get(self.selected_plugin).cloned() else {
             return;
         };
-        match LoadedPlugin::load(package) {
+        self.loaded_plugin = None;
+        self.plugin_multiplier = 1.0;
+        self.plugin_command_count = 0;
+        match LoadedPlugin::load(&package) {
             Ok(plugin) => {
                 self.loaded_plugin = Some(plugin);
                 self.plugin_error = None;
@@ -1563,6 +1576,7 @@ impl VisualizerApp {
             Err(error) => {
                 self.loaded_plugin = None;
                 self.plugin_multiplier = 1.0;
+                self.plugin_command_count = 0;
                 self.plugin_error = Some(error);
             }
         }
@@ -1574,15 +1588,200 @@ impl VisualizerApp {
         self.last_plugin_frame = now;
         let Some(plugin) = &self.loaded_plugin else {
             self.plugin_multiplier = 1.0;
+            self.plugin_command_count = 0;
             return;
         };
-        match plugin.process(&self.features, self.started.elapsed().as_secs_f32(), delta) {
-            Ok(multiplier) => self.plugin_multiplier = multiplier,
+        let mut controls = [0.0; 18];
+        for (target, control) in controls.iter_mut().zip(&self.performance.macros) {
+            *target = control.value;
+        }
+        controls[10..].copy_from_slice(&self.plugin_inputs);
+        match plugin.process(
+            &self.features,
+            self.started.elapsed().as_secs_f32(),
+            delta,
+            &controls,
+        ) {
+            Ok(frame) => {
+                self.plugin_multiplier = frame.response_multiplier;
+                self.plugin_command_count = frame.command_count;
+                self.apply_plugin_frame(&frame.commands[..frame.command_count], frame.event_flags);
+            }
             Err(error) => {
                 self.loaded_plugin = None;
                 self.plugin_multiplier = 1.0;
+                self.plugin_command_count = 0;
                 self.plugin_error = Some(error);
             }
+        }
+    }
+
+    fn apply_plugin_frame(&mut self, commands: &[PluginCommandV2], event_flags: u32) {
+        for command in commands {
+            if command.target == TARGET_RESPONSE {
+                continue;
+            }
+            match command.target {
+                TARGET_MODE_PARAMETER => {
+                    let index = command.index as usize;
+                    let bounds = self.gpu_preset.as_ref().and_then(|renderer| {
+                        self.presets
+                            .iter()
+                            .find(|preset| preset.id == renderer.active_id())
+                            .and_then(|preset| preset.parameters.get(index))
+                            .map(|parameter| (parameter.minimum, parameter.maximum))
+                    });
+                    if let (Some(value), Some((minimum, maximum))) =
+                        (self.mode_parameters.get_mut(index), bounds)
+                    {
+                        *value = plugin_value(*value, command, minimum, maximum);
+                    }
+                }
+                TARGET_COLOR => match command.index {
+                    0 => {
+                        self.colors.hue_shift =
+                            plugin_value(self.colors.hue_shift, command, -1.0, 1.0)
+                    }
+                    1 => {
+                        self.colors.phase_speed =
+                            plugin_value(self.colors.phase_speed, command, -2.0, 2.0)
+                    }
+                    2 => self.colors.glow = plugin_value(self.colors.glow, command, 0.0, 2.0),
+                    3 => self.colors.gloss = plugin_value(self.colors.gloss, command, 0.0, 1.0),
+                    4 => {
+                        self.colors.saturation =
+                            plugin_value(self.colors.saturation, command, 0.0, 1.5)
+                    }
+                    _ => {}
+                },
+                TARGET_CAMERA => {
+                    let (minimum, maximum, interaction, forge) = match command.index {
+                        0 => (
+                            -std::f32::consts::TAU,
+                            std::f32::consts::TAU,
+                            &mut self.interaction.camera_yaw,
+                            &mut self.particle_forge.camera_yaw,
+                        ),
+                        1 => (
+                            -1.2,
+                            1.2,
+                            &mut self.interaction.camera_pitch,
+                            &mut self.particle_forge.camera_pitch,
+                        ),
+                        2 => (
+                            0.35,
+                            3.0,
+                            &mut self.interaction.camera_zoom,
+                            &mut self.particle_forge.camera_zoom,
+                        ),
+                        _ => continue,
+                    };
+                    *interaction = plugin_value(*interaction, command, minimum, maximum);
+                    *forge = *interaction;
+                }
+                TARGET_ZONE => {
+                    let zone_index = command.index as usize / 8;
+                    let property = command.index % 8;
+                    let Some(zone) = self.interaction.zones.get_mut(zone_index) else {
+                        continue;
+                    };
+                    match property {
+                        0 => zone.position.x = plugin_value(zone.position.x, command, 0.0, 1.0),
+                        1 => zone.position.y = plugin_value(zone.position.y, command, 0.0, 1.0),
+                        2 => zone.radius = plugin_value(zone.radius, command, 0.04, 0.45),
+                        3 => zone.strength = plugin_value(zone.strength, command, 0.0, 3.0),
+                        4 => {
+                            zone.kind = ZoneVisualKind::from_code(
+                                plugin_value(f32::from(zone.kind.code()), command, 0.0, 9.0).round()
+                                    as u8,
+                            )
+                        }
+                        5 => {
+                            zone.rotation = plugin_value(
+                                zone.rotation,
+                                command,
+                                -std::f32::consts::TAU,
+                                std::f32::consts::TAU,
+                            )
+                        }
+                        6 => zone.speed = plugin_value(zone.speed, command, -3.0, 3.0),
+                        7 => zone.color_shift = plugin_value(zone.color_shift, command, -1.0, 1.0),
+                        _ => {}
+                    }
+                }
+                TARGET_FORGE => match command.index {
+                    0..=2 => {
+                        let index = command.index as usize;
+                        self.particle_forge.spin[index] =
+                            plugin_value(self.particle_forge.spin[index], command, -1.5, 1.5);
+                    }
+                    3 => {
+                        self.particle_forge.twist =
+                            plugin_value(self.particle_forge.twist, command, 0.0, 2.0)
+                    }
+                    4 => {
+                        let code = plugin_value(
+                            self.particle_forge.topology as u8 as f32,
+                            command,
+                            0.0,
+                            4.0,
+                        )
+                        .round() as usize;
+                        self.particle_forge.topology = ForgeTopology::ALL[code.min(4)];
+                    }
+                    5 => {
+                        self.particle_forge.gradient_shift =
+                            plugin_value(self.particle_forge.gradient_shift, command, 0.0, 1.0)
+                    }
+                    _ => {}
+                },
+                TARGET_PERFORMANCE => match command.index {
+                    0 => {
+                        self.performance.crossfader =
+                            plugin_value(self.performance.crossfader, command, 0.0, 1.0)
+                    }
+                    1 => {
+                        let code = plugin_value(
+                            self.performance.transition as u8 as f32,
+                            command,
+                            0.0,
+                            (Transition::ALL.len() - 1) as f32,
+                        )
+                        .round() as usize;
+                        self.performance.transition =
+                            Transition::ALL[code.min(Transition::ALL.len() - 1)];
+                    }
+                    2 => {
+                        self.performance.transition_softness =
+                            plugin_value(self.performance.transition_softness, command, 0.0, 1.0)
+                    }
+                    3 => self.performance.live_mix = command.value >= 0.5,
+                    _ => {}
+                },
+                TARGET_MACRO => {
+                    let index = command.index as usize;
+                    if let Some(current) = self
+                        .performance
+                        .macros
+                        .get(index)
+                        .map(|control| control.value)
+                    {
+                        let value = plugin_value(current, command, 0.0, 1.0);
+                        self.performance.macros[index].value = value;
+                        self.apply_performance_macro(index, value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if event_flags & EVENT_BEAT != 0 {
+            self.particle_forge.event_envelope = 1.0;
+        }
+        if event_flags & EVENT_TAKE_A != 0 {
+            self.load_performance_deck(0);
+        }
+        if event_flags & EVENT_TAKE_B != 0 {
+            self.load_performance_deck(1);
         }
     }
 
@@ -3432,7 +3631,7 @@ impl VisualizerApp {
                                 self.visual_library_panel = !self.visual_library_panel;
                             }
                         });
-                        let details_label = if self.visual == 2 && !self.plugins.is_empty() {
+                        let details_label = if !self.plugins.is_empty() {
                             "DETAILS & EXTENSIONS"
                         } else {
                             "DETAILS"
@@ -3483,7 +3682,7 @@ impl VisualizerApp {
                                     .color(Color32::from_rgb(115, 145, 175)),
                                 );
                             }
-                            if self.visual == 2 {
+                            if !self.plugins.is_empty() {
                                 self.draw_plugin_controls(ui);
                             }
                             if self.latency.observations > 0 {
@@ -4136,7 +4335,11 @@ impl VisualizerApp {
                     }
                 }
                 ControlEvent::Take(deck) => self.load_performance_deck(deck),
+                ControlEvent::PluginInput(index, value) if index < self.plugin_inputs.len() => {
+                    self.plugin_inputs[index] = value.clamp(0.0, 1.0);
+                }
                 ControlEvent::Macro(_, _) => {}
+                ControlEvent::PluginInput(_, _) => {}
             }
         }
     }
@@ -5720,24 +5923,29 @@ impl VisualizerApp {
         if is_loaded {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "ACTIVE · response ×{:.2}",
-                        self.plugin_multiplier
-                    ))
+                    egui::RichText::new(if package.abi == 1 {
+                        format!("ACTIVE · response ×{:.2}", self.plugin_multiplier)
+                    } else {
+                        format!(
+                            "ACTIVE · ABI v2 · {} bounded routes",
+                            self.plugin_command_count
+                        )
+                    })
                     .strong()
                     .color(Color32::from_rgb(40, 255, 190)),
                 );
                 if ui.button("Unload").clicked() {
                     self.loaded_plugin = None;
                     self.plugin_multiplier = 1.0;
+                    self.plugin_command_count = 0;
                 }
             });
         } else {
             let hash = package.hash_hex();
             ui.label(
                 egui::RichText::new(format!(
-                    "DISABLED · {} · {} · {}",
-                    package.version, package.author, package.license
+                    "DISABLED · ABI v{} · {} · {} · {}",
+                    package.abi, package.version, package.author, package.license
                 ))
                 .small()
                 .color(Color32::from_rgb(145, 165, 185)),
@@ -5770,6 +5978,23 @@ impl VisualizerApp {
             {
                 self.approve_plugin();
             }
+        }
+        if package.abi == 2 {
+            ui.label(
+                egui::RichText::new(plugin_profile_help(&package.id))
+                    .small()
+                    .color(Color32::from_rgb(120, 175, 195)),
+            );
+            egui::CollapsingHeader::new("Plugin input lanes · MIDI CC 20–27 / OSC")
+                .id_salt("plugin-input-lanes")
+                .show(ui, |ui| {
+                    for (index, value) in self.plugin_inputs.iter_mut().enumerate() {
+                        ui.add(
+                            egui::Slider::new(value, 0.0..=1.0)
+                                .text(format!("Input {}", index + 1)),
+                        );
+                    }
+                });
         }
         ui.label(
             egui::RichText::new(format!("Manifest · {}", package.manifest_path.display()))
@@ -5968,6 +6193,15 @@ fn forge_node_position(rect: Rect, position: [f32; 3]) -> Pos2 {
 
 fn shifted_frequency(frequency: f32, shift: f32) -> f32 {
     (frequency + shift).rem_euclid(1.0)
+}
+
+fn plugin_value(current: f32, command: &PluginCommandV2, minimum: f32, maximum: f32) -> f32 {
+    match command.operation {
+        OP_ADD => current + command.value,
+        OP_MULTIPLY => current * command.value,
+        _ => command.value,
+    }
+    .clamp(minimum, maximum)
 }
 
 fn shift_scene_hue(scene: &mut [f32; PRESET_SCENE_FLOATS], shift: f32) {
@@ -6377,6 +6611,36 @@ fn plugin_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PLUGINS", "plugins")
 }
 
+fn plugin_profile_help(id: &str) -> &'static str {
+    match id {
+        "thevisualizer.beat-choreographer" => {
+            "Turns detected beats into response, glow, twist, and Forge event pulses."
+        }
+        "thevisualizer.spectral-colorist" => {
+            "Maps mids and treble into continuous hue, phase, and saturation movement."
+        }
+        "thevisualizer.zone-dancer" => {
+            "Orbits the first Zone Studio layer and changes its strength, type, and rotation."
+        }
+        "thevisualizer.camera-pilot" => {
+            "Performs bounded yaw, pitch, and audio-reactive zoom choreography."
+        }
+        "thevisualizer.particle-conductor" => {
+            "Conducts Particle Forge spin, twist, topology events, and gradient movement."
+        }
+        "thevisualizer.transition-dj" => {
+            "Automates Performance Studio crossfades, transition families, softness, and takes."
+        }
+        "thevisualizer.midi-performance-mapper" => {
+            "Maps plugin inputs 1–8 to Performance macros 1–8."
+        }
+        "thevisualizer.ambient-auto-director" => {
+            "Coordinates slow color, camera, zone, glow, and Forge movement."
+        }
+        _ => "Emits bounded host-owned modulation routes.",
+    }
+}
+
 fn resource_directory(environment: &str, folder: &str) -> PathBuf {
     if let Some(path) = std::env::var_os(environment) {
         return path.into();
@@ -6419,8 +6683,8 @@ mod tests {
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
         VisualHistory, ZoneBand, ZoneVisualKind, callback_is_new, cargo_resource_directory,
         default_needs_recovery, instrument_profile, lerp_color, living_photo_plant_mask,
-        pacing_delay, rare_bird_progress, shift_color, shifted_frequency, status_hint,
-        visual_index_for_key,
+        pacing_delay, plugin_value, rare_bird_progress, shift_color, shifted_frequency,
+        status_hint, visual_index_for_key,
     };
     use eframe::egui::Pos2;
     use std::time::{Duration, Instant};
@@ -6512,6 +6776,23 @@ mod tests {
     fn zone_band_cycle_returns_to_full_range() {
         let band = ZoneBand::Full.next().next().next().next();
         assert!(band == ZoneBand::Full);
+    }
+
+    #[test]
+    fn plugin_commands_apply_only_bounded_operations() {
+        let mut command = thevisualizer_plugin_sdk::PluginCommandV2 {
+            target: thevisualizer_plugin_sdk::TARGET_COLOR,
+            index: 2,
+            operation: thevisualizer_plugin_sdk::OP_ADD,
+            value: 0.75,
+        };
+        assert_eq!(plugin_value(1.5, &command, 0.0, 2.0), 2.0);
+        command.operation = thevisualizer_plugin_sdk::OP_MULTIPLY;
+        command.value = 0.5;
+        assert_eq!(plugin_value(1.5, &command, 0.0, 2.0), 0.75);
+        command.operation = thevisualizer_plugin_sdk::OP_SET;
+        command.value = -10.0;
+        assert_eq!(plugin_value(1.5, &command, 0.0, 2.0), 0.0);
     }
 
     #[test]

@@ -23,7 +23,7 @@ The host exposes five fixed-size bind-group entries:
 - binding 0: the original 32-byte uniform contract containing resolution, time, response gain, low/mid/high energy, and RMS
 - binding 1: a fixed read-only storage buffer containing 256 waveform values followed by 64 spectrum values
 - binding 2: a 32-byte uniform whose original frame delta, peak, waveform length, and spectrum length fields are followed by onset, transient intensity, and reserved padding
-- binding 3: 96 read-only scene floats containing camera state, up to eight normalized sound zones, routed colors, and material values
+- binding 3: 160 read-only scene floats containing camera state, up to eight normalized Zone Studio layers, routed colors, material values, and bounded zone visual controls
 - binding 4: 40 read-only finite mode-parameter floats in metadata order
 
 Bindings 0–2 remain layout-compatible with format 1. Format-2 presets use the scene and parameter buffers without receiving GPU/window handles or allocating host buffers. The fixed bounds prevent preset-controlled buffer allocation.
@@ -41,9 +41,26 @@ The implemented `.tvplugin` manifest contains:
 - platform and architecture
 - relative native-library path; the entry point is fixed as `thevisualizer_plugin_v1`
 
-The plugin ABI is a size-tagged C ABI rather than a Rust ABI. Rust definitions and a matching C/C++ header are in the [Plugin SDK](../plugin-sdk/README.md). ABI v1 implements discovery, metadata inspection, explicit session approval, initialization, synchronous per-frame feature processing, one bounded response-multiplier output, and shutdown.
+The plugin ABI is a size-tagged C ABI rather than a Rust ABI. Rust definitions and a matching C/C++ header are in the [Plugin SDK](../plugin-sdk/README.md). ABI v1 remains loadable with its single bounded response multiplier. ABI v2 adds profile-aware initialization, onset/transient and bounded controller inputs, up to 24 fixed modulation commands, beat/take event flags, and shutdown.
 
-The host supplies the native plugin ABI a versioned, size-tagged read-only snapshot containing time, frame delta, waveform and spectrum slices, RMS, peak, and low/mid/high energy. Feature pointers are valid only for the synchronous process call. Format-2 WGSL presets additionally receive transient intensity and the bounded onset pulse after the original four frame-extras fields, preserving the existing field offsets. The plugin may maintain CPU-side state and return a response multiplier that the host clamps to `0.25..=2.0` before driving a host-rendered shader. It does not receive direct `wgpu`, Direct3D, Vulkan, Metal, native window, capture-device, or audio-buffer ownership in v0.1.
+The host supplies a versioned, size-tagged read-only snapshot containing time, frame delta, waveform and spectrum slices, RMS, peak, low/mid/high energy, onset, transient intensity, ten Performance macro values, and eight external input lanes. MIDI CC 20–27 or localhost OSC `/thevisualizer/plugin/input/1` through `/8` update those lanes. Feature pointers are valid only for the synchronous process call.
+
+Each ABI-v2 command contains a target, index, Set/Add/Multiply operation, and finite value. The host validates the 24-command limit and clamps every target to its existing safe range before applying response, active-mode parameters, color motion/materials, camera, Zone Studio, Particle Forge, Performance Studio, or macros. Beat and deck-take events use a separate bounded bit field. The plugin still receives no direct `wgpu`, Direct3D, Vulkan, Metal, native-window, capture-device, audio-buffer, or frame-lifecycle ownership.
+
+The bundled Creative Suite uses one shared DLL and eight strict manifests:
+
+| Plugin | Host-owned behavior |
+| --- | --- |
+| Beat Choreographer | response, glow, Forge twist, and beat events |
+| Spectral Colorist | hue, phase, and saturation motion |
+| Zone Dancer | Zone Studio position, strength, type, and rotation |
+| Camera Pilot | yaw, pitch, and zoom choreography |
+| Particle Conductor | Particle Forge spin, twist, topology, and gradient |
+| Transition DJ | Performance crossfader, transition, softness, and deck takes |
+| MIDI Performance Mapper | eight external lanes to Performance macros 1–8 |
+| Ambient Auto-Director | coordinated color, camera, zone, glow, and Forge motion |
+
+One native plugin is active at a time. This avoids ordering conflicts and preserves a clear approval identity; simultaneous plugin chains remain deferred.
 
 ## Trust and safety
 
@@ -69,7 +86,7 @@ Desktop native plugins and WGSL presets are not promised to run on microcontroll
 
 ## v0.1 proof
 
-The repository-owned example plugin now:
+The repository-owned ABI-v1 example plugin:
 
 - remains disabled until approved and after restart
 - passes ABI-version and structure-size checks
@@ -77,4 +94,4 @@ The repository-owned example plugin now:
 - drives a visible bounded response multiplier in a host-owned WGSL visual
 - shuts down on unload and rejects processing outside its initialized lifecycle
 
-The example proves the boundary only; it does not establish a public compatibility guarantee beyond v0.1.
+The ABI-v2 Creative Suite proves bounded multi-target routing without giving plugins rendering ownership. Neither ABI establishes a public compatibility guarantee beyond the documented versions.

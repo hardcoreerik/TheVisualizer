@@ -6,7 +6,7 @@ This document records the project license decision and the boundary around futur
 
 ## Project license
 
-TheVisualizer's original source code, documentation, seventeen original bundled WGSL presets, plugin SDK, and example plugin are licensed under [Apache-2.0](../LICENSE). Their manifests use the same SPDX identifier.
+TheVisualizer's original source code, documentation, seventeen original bundled WGSL presets, plugin SDK, ABI-v1 example plugin, and ABI-v2 Creative Suite are licensed under [Apache-2.0](../LICENSE). Their manifests use the same SPDX identifier.
 
 Eight modified WGSL adaptations from VIDVOX ISF-Files are bundled under MIT with an exact source revision, file-level credits, modifications, and the upstream license recorded in [ISF Imports](ISF_IMPORTS.md). The repository contains no MilkDrop source, projectM source, `.milk` presets, unlabeled community preset packs, or third-party textures.
 

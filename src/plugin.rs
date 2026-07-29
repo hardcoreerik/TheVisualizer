@@ -7,7 +7,9 @@ use std::{
 use libloading::Library;
 use sha2::{Digest, Sha256};
 use thevisualizer_plugin_sdk::{
-    ABI_VERSION, ENTRY_POINT, EntryPointFn, FeatureSnapshotV1, PLUGIN_OK, PluginOutputV1, PluginV1,
+    ABI_VERSION, ABI_VERSION_V2, ENTRY_POINT, ENTRY_POINT_V2, EntryPointFn, EntryPointFnV2,
+    FeatureSnapshotV1, FeatureSnapshotV2, MAX_PLUGIN_COMMANDS, OP_MULTIPLY, PLUGIN_OK,
+    PluginCommandV2, PluginInitV2, PluginOutputV1, PluginOutputV2, PluginV1, PluginV2,
 };
 
 use crate::analysis::Features;
@@ -25,6 +27,7 @@ pub struct PluginPackage {
     pub version: String,
     pub author: String,
     pub license: String,
+    pub abi: u32,
     pub library_path: PathBuf,
     pub manifest_path: PathBuf,
     artifact_hash: [u8; 32],
@@ -54,10 +57,23 @@ pub struct PluginDiscovery {
 }
 
 pub struct LoadedPlugin {
-    descriptor: PluginV1,
+    descriptor: LoadedDescriptor,
     _library: Library,
     package_id: String,
     artifact_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+enum LoadedDescriptor {
+    V1(PluginV1),
+    V2(PluginV2),
+}
+
+pub struct PluginFrame {
+    pub response_multiplier: f32,
+    pub commands: [PluginCommandV2; MAX_PLUGIN_COMMANDS],
+    pub command_count: usize,
+    pub event_flags: u32,
 }
 
 impl LoadedPlugin {
@@ -82,44 +98,55 @@ impl LoadedPlugin {
             format!("Could not load {}: {error}", package.library_path.display())
         })?;
         // SAFETY: The fixed symbol is the versioned ABI entry point defined by the SDK.
-        let entry = unsafe {
-            *library
-                .get::<EntryPointFn>(ENTRY_POINT)
-                .map_err(|error| format!("Missing `thevisualizer_plugin_v1`: {error}"))?
+        let (descriptor, result) = if package.abi == ABI_VERSION {
+            // SAFETY: The fixed symbol is the versioned ABI entry point defined by the SDK.
+            let entry = unsafe {
+                *library
+                    .get::<EntryPointFn>(ENTRY_POINT)
+                    .map_err(|error| format!("Missing `thevisualizer_plugin_v1`: {error}"))?
+            };
+            // SAFETY: An approved plugin promises that the entry point returns a static descriptor.
+            let descriptor = unsafe { checked_descriptor(entry(), ABI_VERSION)? };
+            let initialize = descriptor
+                .initialize
+                .ok_or("Plugin does not provide initialize")?;
+            descriptor
+                .process
+                .ok_or("Plugin does not provide process")?;
+            descriptor
+                .shutdown
+                .ok_or("Plugin does not provide shutdown")?;
+            // SAFETY: Function pointer and ABI were validated above.
+            (LoadedDescriptor::V1(descriptor), unsafe { initialize() })
+        } else {
+            // SAFETY: The fixed symbol is the versioned ABI entry point defined by the SDK.
+            let entry = unsafe {
+                *library
+                    .get::<EntryPointFnV2>(ENTRY_POINT_V2)
+                    .map_err(|error| format!("Missing `thevisualizer_plugin_v2`: {error}"))?
+            };
+            // SAFETY: An approved plugin promises that the entry point returns a static descriptor.
+            let descriptor = unsafe { checked_descriptor(entry(), ABI_VERSION_V2)? };
+            let initialize = descriptor
+                .initialize
+                .ok_or("Plugin does not provide initialize")?;
+            descriptor
+                .process
+                .ok_or("Plugin does not provide process")?;
+            descriptor
+                .shutdown
+                .ok_or("Plugin does not provide shutdown")?;
+            let init = PluginInitV2 {
+                struct_size: size_of::<PluginInitV2>() as u32,
+                abi_version: ABI_VERSION_V2,
+                profile_id: package.id.as_ptr(),
+                profile_id_len: package.id.len() as u32,
+            };
+            // SAFETY: The profile bytes remain valid for this synchronous initialization call.
+            (LoadedDescriptor::V2(descriptor), unsafe {
+                initialize(&init)
+            })
         };
-        // SAFETY: An approved plugin promises that the entry point returns a static descriptor.
-        let descriptor_ptr = unsafe { entry() };
-        if descriptor_ptr.is_null() {
-            return Err("Plugin returned a null ABI descriptor".to_owned());
-        }
-        // SAFETY: The first two u32 fields form the common header for every ABI descriptor.
-        let header = unsafe { &*descriptor_ptr.cast::<AbiHeader>() };
-        if header.struct_size < size_of::<PluginV1>() as u32 {
-            return Err(format!(
-                "Plugin descriptor is {} bytes; host requires at least {}",
-                header.struct_size,
-                size_of::<PluginV1>()
-            ));
-        }
-        if header.abi_version != ABI_VERSION {
-            return Err(format!(
-                "Plugin ABI {} is incompatible with host ABI {ABI_VERSION}",
-                header.abi_version
-            ));
-        }
-        // SAFETY: The validated size covers the complete v1 descriptor.
-        let descriptor = unsafe { *descriptor_ptr };
-        let initialize = descriptor
-            .initialize
-            .ok_or("Plugin does not provide initialize")?;
-        descriptor
-            .process
-            .ok_or("Plugin does not provide process")?;
-        descriptor
-            .shutdown
-            .ok_or("Plugin does not provide shutdown")?;
-        // SAFETY: Function pointer and ABI were validated above.
-        let result = unsafe { initialize() };
         if result != PLUGIN_OK {
             return Err(format!("Plugin initialization failed with code {result}"));
         }
@@ -145,8 +172,9 @@ impl LoadedPlugin {
         features: &Features,
         time_seconds: f32,
         delta_seconds: f32,
-    ) -> Result<f32, String> {
-        let snapshot = FeatureSnapshotV1 {
+        controls: &[f32],
+    ) -> Result<PluginFrame, String> {
+        let base = FeatureSnapshotV1 {
             struct_size: size_of::<FeatureSnapshotV1>() as u32,
             abi_version: ABI_VERSION,
             time_seconds,
@@ -161,35 +189,115 @@ impl LoadedPlugin {
             mid: features.mid,
             high: features.high,
         };
-        let mut output = PluginOutputV1::default();
-        let process = self
-            .descriptor
-            .process
-            .ok_or("Plugin process function disappeared")?;
-        // SAFETY: Both values remain alive and exclusively borrowed for this synchronous call.
-        let result = unsafe { process(&snapshot, &mut output) };
-        if result != PLUGIN_OK {
-            return Err(format!("Plugin processing failed with code {result}"));
+        match self.descriptor {
+            LoadedDescriptor::V1(descriptor) => {
+                let mut output = PluginOutputV1::default();
+                let process = descriptor
+                    .process
+                    .ok_or("Plugin process function disappeared")?;
+                // SAFETY: Both values remain alive and exclusively borrowed for this synchronous call.
+                let result = unsafe { process(&base, &mut output) };
+                if result != PLUGIN_OK {
+                    return Err(format!("Plugin processing failed with code {result}"));
+                }
+                if output.struct_size < size_of::<PluginOutputV1>() as u32
+                    || output.abi_version != ABI_VERSION
+                    || !output.response_multiplier.is_finite()
+                {
+                    return Err("Plugin returned an invalid v1 output".to_owned());
+                }
+                Ok(PluginFrame {
+                    response_multiplier: output
+                        .response_multiplier
+                        .clamp(MIN_RESPONSE_MULTIPLIER, MAX_RESPONSE_MULTIPLIER),
+                    commands: [PluginCommandV2::default(); MAX_PLUGIN_COMMANDS],
+                    command_count: 0,
+                    event_flags: 0,
+                })
+            }
+            LoadedDescriptor::V2(descriptor) => {
+                let snapshot = FeatureSnapshotV2 {
+                    struct_size: size_of::<FeatureSnapshotV2>() as u32,
+                    abi_version: ABI_VERSION_V2,
+                    base,
+                    onset: features.onset,
+                    transient: features.transient,
+                    controls: controls.as_ptr(),
+                    controls_len: controls.len() as u32,
+                };
+                let mut output = PluginOutputV2::default();
+                let process = descriptor
+                    .process
+                    .ok_or("Plugin process function disappeared")?;
+                // SAFETY: All pointers remain valid for this synchronous call.
+                let result = unsafe { process(&snapshot, &mut output) };
+                if result != PLUGIN_OK {
+                    return Err(format!("Plugin processing failed with code {result}"));
+                }
+                if output.struct_size < size_of::<PluginOutputV2>() as u32
+                    || output.abi_version != ABI_VERSION_V2
+                    || output.command_count as usize > MAX_PLUGIN_COMMANDS
+                    || output.commands[..output.command_count as usize]
+                        .iter()
+                        .any(|command| {
+                            command.target > 7
+                                || command.operation > OP_MULTIPLY
+                                || !command.value.is_finite()
+                        })
+                {
+                    return Err("Plugin returned an invalid v2 output".to_owned());
+                }
+                let response_multiplier = output.commands[..output.command_count as usize]
+                    .iter()
+                    .rev()
+                    .find(|command| command.target == 0)
+                    .map_or(1.0, |command| command.value)
+                    .clamp(MIN_RESPONSE_MULTIPLIER, MAX_RESPONSE_MULTIPLIER);
+                Ok(PluginFrame {
+                    response_multiplier,
+                    commands: output.commands,
+                    command_count: output.command_count as usize,
+                    event_flags: output.event_flags,
+                })
+            }
         }
-        if output.struct_size < size_of::<PluginOutputV1>() as u32
-            || output.abi_version != ABI_VERSION
-            || !output.response_multiplier.is_finite()
-        {
-            return Err("Plugin returned an invalid v1 output".to_owned());
-        }
-        Ok(output
-            .response_multiplier
-            .clamp(MIN_RESPONSE_MULTIPLIER, MAX_RESPONSE_MULTIPLIER))
     }
 }
 
 impl Drop for LoadedPlugin {
     fn drop(&mut self) {
-        if let Some(shutdown) = self.descriptor.shutdown {
+        let shutdown = match self.descriptor {
+            LoadedDescriptor::V1(descriptor) => descriptor.shutdown,
+            LoadedDescriptor::V2(descriptor) => descriptor.shutdown,
+        };
+        if let Some(shutdown) = shutdown {
             // SAFETY: The library remains loaded until after this Drop implementation returns.
             unsafe { shutdown() };
         }
     }
+}
+
+unsafe fn checked_descriptor<T: Copy>(pointer: *const T, abi: u32) -> Result<T, String> {
+    if pointer.is_null() {
+        return Err("Plugin returned a null ABI descriptor".to_owned());
+    }
+    // SAFETY: The plugin contract guarantees a readable common header.
+    let header = unsafe { &*pointer.cast::<AbiHeader>() };
+    if header.struct_size < size_of::<T>() as u32 {
+        return Err(format!(
+            "Plugin descriptor is {} bytes; host requires at least {}",
+            header.struct_size,
+            size_of::<T>()
+        ));
+    }
+    if header.abi_version != abi {
+        return Err(format!(
+            "Plugin ABI {} is incompatible with host ABI {abi}",
+            header.abi_version
+        ));
+    }
+    // SAFETY: The validated size covers the complete descriptor.
+    Ok(unsafe { *pointer })
 }
 
 #[repr(C)]
@@ -204,6 +312,7 @@ struct Manifest {
     version: String,
     author: String,
     license: String,
+    abi: u32,
     platform: String,
     library: PathBuf,
 }
@@ -258,6 +367,7 @@ pub fn discover(directory: &Path) -> PluginDiscovery {
                 version: manifest.version,
                 author: manifest.author,
                 license: manifest.license,
+                abi: manifest.abi,
                 library_path,
                 manifest_path: path.clone(),
                 artifact_hash,
@@ -328,9 +438,9 @@ fn parse_manifest(source: &str) -> Result<Manifest, String> {
             optional_number(format)
         ));
     }
-    if abi != Some(ABI_VERSION) {
+    if !matches!(abi, Some(ABI_VERSION | ABI_VERSION_V2)) {
         return Err(format!(
-            "unsupported plugin ABI {}; expected {ABI_VERSION}",
+            "unsupported plugin ABI {}; expected {ABI_VERSION} or {ABI_VERSION_V2}",
             optional_number(abi)
         ));
     }
@@ -349,6 +459,7 @@ fn parse_manifest(source: &str) -> Result<Manifest, String> {
         version: required(version, "version")?,
         author: required(author, "author")?,
         license: required(license, "license")?,
+        abi: abi.expect("validated above"),
         platform: required(platform, "platform")?,
         library,
     })
@@ -412,7 +523,13 @@ mod tests {
         let manifest = parse_manifest(VALID).unwrap();
         assert_eq!(manifest.id, "test.plugin");
         assert_eq!(manifest.library, PathBuf::from("plugin.dll"));
-        assert!(parse_manifest(&VALID.replace("abi=1", "abi=2")).is_err());
+        assert_eq!(
+            parse_manifest(&VALID.replace("abi=1", "abi=2"))
+                .unwrap()
+                .abi,
+            ABI_VERSION_V2
+        );
+        assert!(parse_manifest(&VALID.replace("abi=1", "abi=3")).is_err());
         assert!(parse_manifest(&format!("{VALID}unknown=value\n")).is_err());
         assert!(parse_manifest(&VALID.replace("plugin.dll", "C:\\plugin.dll")).is_err());
 
@@ -427,6 +544,7 @@ mod tests {
             version: "0.1.0".to_owned(),
             author: "Test".to_owned(),
             license: "Test-only".to_owned(),
+            abi: ABI_VERSION,
             library_path: path.clone(),
             manifest_path: PathBuf::new(),
             artifact_hash: [0; 32],
@@ -437,5 +555,29 @@ mod tests {
         };
         assert!(error.contains("changed after approval"));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn bundled_plugins_discover_both_abi_generations() {
+        let discovery = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/plugins")));
+        assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
+        assert_eq!(discovery.packages.len(), 9);
+        assert_eq!(
+            discovery
+                .packages
+                .iter()
+                .filter(|package| package.abi == ABI_VERSION_V2)
+                .count(),
+            8
+        );
+        for package in discovery.packages {
+            let plugin = LoadedPlugin::load(&package).expect("load bundled plugin");
+            let frame = plugin
+                .process(&Features::default(), 1.0, 1.0 / 60.0, &[0.5; 18])
+                .expect("process bundled plugin");
+            assert!(frame.response_multiplier.is_finite());
+            assert!(frame.command_count <= MAX_PLUGIN_COMMANDS);
+            drop(plugin);
+        }
     }
 }
