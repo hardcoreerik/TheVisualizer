@@ -1,0 +1,64 @@
+//! format: 2
+//! id: thevisualizer.data-storm
+//! name: Data Storm
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-drop|Bass Drop|0.0|3.0|1.4
+//! parameter: Audio|treble-packets|Treble Packets|0.0|3.0|1.4
+//! parameter: Rain|column-density|Column Density|8.0|80.0|36.0
+//! parameter: Rain|fall-speed|Fall Speed|-5.0|5.0|1.2
+//! parameter: Rain|packet-length|Packet Length|0.02|0.5|0.13
+//! parameter: Depth|perspective|Perspective|0.0|3.0|1.1
+//! parameter: Storm|wind|Wind|-3.0|3.0|0.35
+//! parameter: Storm|lightning|Lightning|0.0|4.0|1.6
+//! parameter: Grid|horizon-grid|Horizon Grid|0.0|2.0|0.65
+//! parameter: Camera|drift|Camera Drift|-2.0|2.0|0.08
+//! parameter: Surface|exposure|Exposure|0.2|3.0|0.9
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = p.xy / res;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let depth = pow(max(0.03, 1.0 - uv.y), 1.0 + controls.values[6]);
+    let columns = controls.values[3] * mix(0.35, 1.0, depth);
+    let cell = floor(vec2f((uv.x + uv.y * controls.values[7] * 0.08) * columns,
+                           (uv.y + uniforms.time * controls.values[4] * (0.08 + depth * 0.22)) / controls.values[5]));
+    let local = fract(vec2f(uv.x * columns, (uv.y + uniforms.time * controls.values[4] * 0.1) / controls.values[5]));
+    let band = min(u32(abs(cell.x)) % 64u, 63u);
+    let energy = clamp(features.spectrum[band] * response, 0.0, 1.5);
+    let packet = step(0.76 - high * controls.values[2] * 0.08, hash21(cell))
+        * smoothstep(0.45, 0.05, abs(local.x - 0.5))
+        * smoothstep(1.0, 0.45, local.y);
+    let tail = exp(-local.y * (4.0 + 14.0 / max(controls.values[5], 0.02))) * step(0.58, hash21(vec2f(cell.x, 0.0)));
+    let grid_x = 1.0 - smoothstep(0.0, 0.025, min(fract(uv.x * 24.0 / depth), 1.0 - fract(uv.x * 24.0 / depth)));
+    let grid_y = 1.0 - smoothstep(0.0, 0.025, min(fract(depth * 18.0), 1.0 - fract(depth * 18.0)));
+    let lightning = extras.onset * controls.values[8] * pow(max(0.0, 1.0 - abs(uv.x - 0.5 - sin(uv.y * 21.0) * 0.04) * 18.0), 5.0);
+    var color = routed(88u) * (0.35 + depth * 0.15);
+    color += mix(routed(76u), routed(80u), f32(band) / 63.0) * (packet + tail * 0.25) * (0.3 + energy);
+    color += routed(72u) * (grid_x + grid_y) * controls.values[9] * depth * 0.12;
+    color += routed(84u) * lightning;
+    color += routed(72u) * bass * controls.values[1] * exp(-abs(uv.y - 0.82) * 30.0) * 0.2;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.8 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

@@ -1,0 +1,69 @@
+//! format: 2
+//! id: thevisualizer.bass-monoliths
+//! name: Bass Monoliths
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.9
+//! parameter: Audio|bass-height|Bass Height|0.0|4.0|1.7
+//! parameter: Audio|treble-edges|Treble Edges|0.0|3.0|1.2
+//! parameter: City|monolith-count|Monolith Count|8.0|64.0|28.0
+//! parameter: City|width|Width|0.2|0.95|0.72
+//! parameter: City|depth|Depth|0.0|3.0|1.2
+//! parameter: Surface|edge-light|Edge Light|0.0|4.0|1.4
+//! parameter: Surface|window-density|Window Density|1.0|20.0|7.0
+//! parameter: Atmosphere|fog|Fog|0.0|2.0|0.55
+//! parameter: Motion|march-speed|March Speed|-3.0|3.0|0.25
+//! parameter: Camera|tilt|Tilt|-1.0|1.0|0.08
+//! parameter: Surface|exposure|Exposure|0.2|3.0|0.9
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hash11(v: f32) -> f32 { return fract(sin(v * 127.1) * 43758.5453); }
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = p.xy / res;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let horizon = 0.78 + scene.values[3] * 0.08 + controls.values[10] * 0.1;
+    let count = controls.values[3];
+    let x = uv.x * count + uniforms.time * controls.values[9];
+    let column = floor(x);
+    let local_x = fract(x) - 0.5;
+    let band = min(u32(abs(column)) % 64u, 63u);
+    let energy = clamp(features.spectrum[band] * response, 0.0, 1.5);
+    let random = hash11(column);
+    let height = (0.08 + random * 0.28 + energy * controls.values[1] * 0.22) * (0.65 + controls.values[5] * 0.2);
+    let top = horizon - height;
+    let body = step(abs(local_x), controls.values[4] * 0.48) * step(top, uv.y) * step(uv.y, horizon);
+    let edge = smoothstep(0.08, 0.0, abs(abs(local_x) - controls.values[4] * 0.48))
+        * step(top, uv.y) * step(uv.y, horizon);
+    let cap = smoothstep(0.018, 0.0, abs(uv.y - top)) * step(abs(local_x), controls.values[4] * 0.5);
+    let windows = step(0.78, hash11(floor(uv.y * controls.values[7] * 20.0) + column * 17.0))
+        * step(0.15, fract(uv.y * controls.values[7] * 20.0)) * body;
+    let fog = exp(-abs(uv.y - horizon) * 8.0) * controls.values[8];
+    let ground = step(horizon, uv.y) * exp(-(uv.y - horizon) * 4.0);
+    var color = routed(88u) * mix(0.25, 0.55, uv.y);
+    color += routed(76u) * body * (0.08 + energy * 0.22);
+    color += routed(80u) * (edge + cap) * controls.values[6] * (0.12 + high * controls.values[2] * 0.25);
+    color += routed(84u) * windows * (0.12 + energy * 0.35);
+    color += routed(72u) * ground * bass * 0.2 + mix(routed(72u), routed(80u), 0.5) * fog * 0.12;
+    color += routed(84u) * extras.onset * cap * 0.5;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.8 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

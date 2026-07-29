@@ -327,7 +327,7 @@ mod tests {
 
         let bundled = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/presets")));
         assert!(bundled.errors.is_empty(), "{:?}", bundled.errors);
-        assert_eq!(bundled.presets.len(), 9);
+        assert_eq!(bundled.presets.len(), 17);
         let city = bundled
             .presets
             .iter()
@@ -338,6 +338,35 @@ mod tests {
         for preset in &bundled.presets {
             assert_eq!(preset.format, 2);
             assert!((10..=40).contains(&preset.parameters.len()));
+        }
+    }
+
+    #[test]
+    fn bundled_wgsl_compiles() {
+        let instance = eframe::wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(
+            &eframe::wgpu::RequestAdapterOptions {
+                power_preference: eframe::wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            },
+        ))
+        .expect("a graphics adapter is required to validate bundled WGSL");
+        let (device, _) =
+            pollster::block_on(adapter.request_device(&eframe::wgpu::DeviceDescriptor::default()))
+                .unwrap();
+        let bundled = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/presets")));
+        for preset in bundled.presets {
+            let error_scope = device.push_error_scope(eframe::wgpu::ErrorFilter::Validation);
+            let _ = device.create_shader_module(eframe::wgpu::ShaderModuleDescriptor {
+                label: Some(&preset.name),
+                source: eframe::wgpu::ShaderSource::Wgsl(preset.shader.as_str().into()),
+            });
+            assert!(
+                pollster::block_on(error_scope.pop()).is_none(),
+                "{} failed WGSL validation",
+                preset.name
+            );
         }
     }
 

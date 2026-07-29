@@ -1,0 +1,68 @@
+//! format: 2
+//! id: thevisualizer.event-horizon
+//! name: Event Horizon
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-mass|Bass Mass|0.0|3.0|1.5
+//! parameter: Audio|treble-jets|Treble Jets|0.0|3.0|1.3
+//! parameter: Horizon|radius|Radius|0.08|0.65|0.25
+//! parameter: Horizon|lensing|Lensing|0.0|4.0|1.4
+//! parameter: Disk|disk-width|Disk Width|0.01|0.4|0.09
+//! parameter: Disk|disk-speed|Disk Speed|-4.0|4.0|0.7
+//! parameter: Disk|heat|Heat|0.0|4.0|1.5
+//! parameter: Jets|jet-strength|Jet Strength|0.0|4.0|1.2
+//! parameter: Stars|star-density|Star Density|0.0|1.0|0.65
+//! parameter: Camera|orbit|Orbit|-2.0|2.0|0.06
+//! parameter: Surface|exposure|Exposure|0.2|3.0|0.9
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    uv /= max(scene.values[4], 0.35);
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let radius = controls.values[3] * (1.0 + bass * controls.values[1] * 0.08);
+    let r = length(uv);
+    let angle = atan2(uv.y, uv.x) + scene.values[2] + uniforms.time * controls.values[10];
+    let lens = controls.values[4] * radius / max(r, 0.025);
+    let warped_angle = angle + lens * 0.32;
+    let disk_y = uv.y + sin(warped_angle * 2.0 + uniforms.time * controls.values[6]) * controls.values[5] * 0.25;
+    let disk = exp(-abs(disk_y) / max(controls.values[5], 0.01))
+        * smoothstep(radius * 0.7, radius * 1.2, r) * exp(-r * 0.8);
+    let doppler = 0.5 + 0.5 * cos(warped_angle);
+    let band = min(u32(fract(warped_angle / 6.28318 + 1.0) * 64.0), 63u);
+    let energy = features.spectrum[band] * response;
+    let photon_ring = 0.009 / max(abs(r - radius * (1.0 + lens * 0.08)), 0.005);
+    let shadow = 1.0 - smoothstep(radius * 0.78, radius, r);
+    let jet = exp(-abs(uv.x) * 30.0) * smoothstep(radius, radius * 1.8, abs(uv.y))
+        * controls.values[8] * (0.15 + high * controls.values[2] + extras.onset);
+    let star_uv = floor((uv + normalize(uv + vec2f(0.001)) * lens * 0.08) * 75.0);
+    let stars = step(0.995 - controls.values[9] * 0.014, hash21(star_uv));
+    var color = routed(88u) * 0.35 + routed(84u) * stars * (0.2 + high * 0.4);
+    color += mix(routed(72u), routed(80u), doppler) * disk * controls.values[7] * (0.12 + energy * 0.45);
+    color += routed(84u) * photon_ring * (0.04 + bass * 0.08);
+    color += mix(routed(76u), routed(80u), 0.5) * jet * 0.4;
+    color *= 1.0 - shadow;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.8 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

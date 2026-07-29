@@ -1,0 +1,65 @@
+//! format: 2
+//! id: thevisualizer.plasma-loom
+//! name: Plasma Loom
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-tension|Bass Tension|0.0|3.0|1.3
+//! parameter: Audio|treble-sparks|Treble Sparks|0.0|3.0|1.4
+//! parameter: Weave|warp-threads|Warp Threads|3.0|32.0|12.0
+//! parameter: Weave|weft-threads|Weft Threads|3.0|32.0|9.0
+//! parameter: Weave|thread-width|Thread Width|0.002|0.12|0.025
+//! parameter: Plasma|turbulence|Turbulence|0.0|3.0|1.0
+//! parameter: Plasma|pulse-speed|Pulse Speed|-4.0|4.0|0.7
+//! parameter: Plasma|cross-glow|Cross Glow|0.0|4.0|1.4
+//! parameter: Motion|twist|Twist|-3.0|3.0|0.4
+//! parameter: Camera|zoom|Zoom|0.3|2.5|1.0
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn filament(v: f32, width: f32) -> f32 { return exp(-abs(v) / max(width, 0.002)); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    uv /= max(scene.values[4] * controls.values[10], 0.3);
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let angle = controls.values[9] * sin(length(uv) * 2.0 + uniforms.time * 0.2);
+    let c = cos(angle); let s = sin(angle);
+    uv = vec2f(c * uv.x - s * uv.y, s * uv.x + c * uv.y);
+    let wx = min(u32(clamp(fract(uv.x * 0.35 + 0.5), 0.0, 0.999) * 256.0), 255u);
+    let sy = min(u32(clamp(fract(uv.y * 0.35 + 0.5), 0.0, 0.999) * 64.0), 63u);
+    let wave = features.waveform[wx] * response;
+    let spectrum = features.spectrum[sy] * response;
+    let turbulence = sin(uv.y * 7.0 + uniforms.time * controls.values[7]) * controls.values[6] * 0.08;
+    let warp_phase = fract((uv.x + turbulence + wave * 0.15) * controls.values[3]) - 0.5;
+    let weft_phase = fract((uv.y - turbulence + spectrum * 0.12) * controls.values[4]) - 0.5;
+    let warp = filament(warp_phase, controls.values[5]);
+    let weft = filament(weft_phase, controls.values[5]);
+    let crossings = warp * weft * controls.values[8] * (0.6 + extras.onset);
+    let spark = pow(max(0.0, sin((uv.x + uv.y) * 45.0 - uniforms.time * 8.0)), 28.0)
+        * high * controls.values[2];
+    var color = routed(88u) * (0.35 + 0.08 * sin(length(uv) * 4.0));
+    color += routed(76u) * warp * (0.16 + bass * controls.values[1] * 0.35);
+    color += routed(80u) * weft * (0.16 + spectrum * 0.5);
+    color += routed(84u) * crossings * 0.5 + routed(72u) * spark;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.75 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

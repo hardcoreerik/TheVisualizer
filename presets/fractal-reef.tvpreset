@@ -1,0 +1,69 @@
+//! format: 2
+//! id: thevisualizer.fractal-reef
+//! name: Fractal Reef
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.7
+//! parameter: Audio|bass-growth|Bass Growth|0.0|3.0|1.4
+//! parameter: Audio|treble-polyps|Treble Polyps|0.0|3.0|1.4
+//! parameter: Reef|branch-count|Branch Count|3.0|14.0|7.0
+//! parameter: Reef|iterations|Iterations|2.0|8.0|5.0
+//! parameter: Reef|branch-width|Branch Width|0.002|0.12|0.025
+//! parameter: Water|current-speed|Current Speed|-3.0|3.0|0.35
+//! parameter: Water|caustics|Caustics|0.0|4.0|1.3
+//! parameter: Life|polyp-glow|Polyp Glow|0.0|4.0|1.5
+//! parameter: Life|spawn-density|Spawn Density|0.0|2.0|0.8
+//! parameter: Camera|drift|Drift|-2.0|2.0|0.06
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    uv /= max(scene.values[4], 0.35);
+    uv.x += sin(uv.y * 2.0 + uniforms.time * controls.values[6]) * 0.05;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    var q = uv;
+    var reef = 0.0;
+    var tips = 0.0;
+    let iterations = i32(floor(controls.values[4] + 0.5));
+    for (var i = 0; i < 8; i += 1) {
+        if i < iterations {
+            q = abs(q) / max(dot(q, q), 0.16) - vec2f(0.72 + bass * controls.values[1] * 0.03, 0.48);
+            let branch = exp(-abs(length(q) - 0.55) / max(controls.values[5], 0.002));
+            reef += branch / (1.0 + f32(i));
+            tips += exp(-length(q - vec2f(0.0, 0.52)) * 18.0) / (1.0 + f32(i) * 0.4);
+        }
+    }
+    let angle = atan2(uv.y, uv.x);
+    reef *= 0.45 + 0.55 * pow(max(0.0, cos(angle * controls.values[3])), 4.0);
+    let caustic = pow(max(0.0, sin(uv.x * 18.0 + sin(uv.y * 11.0) + uniforms.time * 1.7)), 12.0)
+        * controls.values[7];
+    let spores = step(0.993 - controls.values[9] * 0.01,
+        hash21(floor((uv + vec2f(0.0, uniforms.time * 0.03)) * 55.0)));
+    var color = routed(88u) * mix(0.55, 0.2, clamp(uv.y + 0.5, 0.0, 1.0));
+    color += mix(routed(76u), routed(80u), 0.5 + 0.5 * sin(angle * 3.0)) * reef * (0.22 + bass * 0.35);
+    color += routed(84u) * tips * controls.values[8] * (0.2 + high * controls.values[2] + extras.onset);
+    color += routed(72u) * caustic * 0.11 + routed(80u) * spores * high * 0.4;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.75 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

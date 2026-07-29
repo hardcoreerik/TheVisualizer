@@ -13,7 +13,7 @@ mod visual_director;
 
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -736,6 +736,9 @@ struct VisualizerApp {
     visual: usize,
     overlay: bool,
     show_text: bool,
+    visual_library_panel: bool,
+    visual_query: String,
+    favorite_visuals: Vec<String>,
     instrument_panel: bool,
     mode_panel: bool,
     forge_panel: bool,
@@ -891,6 +894,9 @@ impl VisualizerApp {
             visual: 0,
             overlay: true,
             show_text: true,
+            visual_library_panel: false,
+            visual_query: String::new(),
+            favorite_visuals: Vec::new(),
             instrument_panel: false,
             mode_panel: false,
             forge_panel: false,
@@ -1536,6 +1542,7 @@ impl VisualizerApp {
             reset,
             revert,
             labels,
+            visual_library,
             instrument,
             mode_panel,
             forge,
@@ -1555,6 +1562,7 @@ impl VisualizerApp {
                 input.key_pressed(egui::Key::Delete),
                 input.key_pressed(egui::Key::R) && !input.modifiers.shift,
                 input.key_pressed(egui::Key::R) && input.modifiers.shift,
+                input.key_pressed(egui::Key::H),
                 input.key_pressed(egui::Key::L),
                 input.key_pressed(egui::Key::I),
                 input.key_pressed(egui::Key::O),
@@ -1617,6 +1625,9 @@ impl VisualizerApp {
         if labels {
             self.show_text = !self.show_text;
         }
+        if visual_library {
+            self.visual_library_panel = !self.visual_library_panel;
+        }
         if instrument {
             self.instrument_panel = !self.instrument_panel;
         }
@@ -1636,7 +1647,9 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.performance_panel {
+            if self.visual_library_panel {
+                self.visual_library_panel = false;
+            } else if self.performance_panel {
                 self.performance_panel = false;
             } else if self.forge_panel {
                 self.forge_panel = false;
@@ -3123,7 +3136,7 @@ impl VisualizerApp {
                                 .gpu_preset
                                 .as_ref()
                                 .map(|renderer| renderer.active_id().to_owned());
-                            let selected_text = active_id
+                            let active_name = active_id
                                 .as_ref()
                                 .and_then(|id| self.presets.iter().find(|preset| &preset.id == id))
                                 .map_or_else(
@@ -3134,43 +3147,18 @@ impl VisualizerApp {
                                     },
                                     |preset| preset.name.clone(),
                                 );
-                            let mut selected = None;
-                            let mut refresh = false;
                             ui.horizontal(|ui| {
-                                ui.label("Preset");
-                                egui::ComboBox::from_id_salt("gpu-preset")
-                                    .width(270.0)
-                                    .selected_text(selected_text)
-                                    .show_ui(ui, |ui| {
-                                        for (index, preset) in self.presets.iter().enumerate() {
-                                            if ui
-                                                .selectable_label(
-                                                    active_id.as_ref() == Some(&preset.id),
-                                                    &preset.name,
-                                                )
-                                                .on_hover_text(format!(
-                                                    "format {} · {} · {} · {} · {}",
-                                                    preset.format,
-                                                    preset.version,
-                                                    preset.author,
-                                                    preset.license,
-                                                    preset.path.display()
-                                                ))
-                                                .clicked()
-                                            {
-                                                selected = Some(index);
-                                            }
-                                        }
-                                    });
-                                refresh = ui.button("Refresh").clicked();
-                                ui.checkbox(&mut self.auto_reload_presets, "Live reload");
+                                ui.label(egui::RichText::new(active_name).strong());
+                                if ui.small_button("←").on_hover_text("Previous preset").clicked() {
+                                    self.cycle_preset(false);
+                                }
+                                if ui.small_button("→").on_hover_text("Next preset").clicked() {
+                                    self.cycle_preset(true);
+                                }
+                                if ui.button("Library [L]").clicked() {
+                                    self.visual_library_panel = true;
+                                }
                             });
-                            if let Some(index) = selected {
-                                self.load_preset(index);
-                            }
-                            if refresh {
-                                self.refresh_presets();
-                            }
                         }
                         let response = self
                             .gpu_preset
@@ -3240,6 +3228,13 @@ impl VisualizerApp {
                                     .clicked()
                             {
                                 self.forge_panel = !self.forge_panel;
+                            }
+                            if ui
+                                .selectable_label(self.visual_library_panel, "Library [L]")
+                                .on_hover_text("Browse all visuals by family.")
+                                .clicked()
+                            {
+                                self.visual_library_panel = !self.visual_library_panel;
                             }
                         });
                         let details_label = if self.visual == 2 && !self.plugins.is_empty() {
@@ -3410,7 +3405,7 @@ impl VisualizerApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "<-/-> visual · I instrument · O mode · F forge · P performance · L labels · Shift+R revert · Tab · Esc",
+                                "<-/-> visual · L library · H labels · I instrument · O mode · F forge · P performance · Shift+R revert · Tab · Esc",
                             )
                             .small()
                             .color(Color32::from_rgb(110, 130, 150)),
@@ -3418,7 +3413,7 @@ impl VisualizerApp {
                         .on_hover_text(
                             "Left/Right cycles visuals; 1/2/3/4 selects one directly; Up/Down changes \
                              GPU presets; I opens the Instrument Panel; right-click/right-drag acts \
-                             directly on the canvas; L hides visual text; Shift+R reverts session \
+                             directly on the canvas; L opens the visual library; H hides visual text; Shift+R reverts session \
                              changes; Tab hides the overlay; Escape closes the panel or returns to \
                              windowed mode before exiting.",
                         );
@@ -4406,6 +4401,154 @@ impl VisualizerApp {
         self.forge_panel = open;
     }
 
+    fn draw_visual_library(&mut self, ctx: &egui::Context) {
+        let mut open = self.visual_library_panel;
+        egui::Window::new("VISUAL LIBRARY")
+            .id(egui::Id::new("visual-library"))
+            .anchor(egui::Align2::LEFT_TOP, [20.0, 20.0])
+            .default_width(430.0)
+            .min_width(360.0)
+            .resizable(true)
+            .vscroll(true)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(format!("{} VISUALS", self.presets.len() + 3));
+                    ui.label(
+                        egui::RichText::new("L close · H labels")
+                            .small()
+                            .color(Color32::from_rgb(110, 150, 170)),
+                    );
+                });
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.visual_query)
+                        .hint_text("Search name or family…"),
+                );
+                ui.horizontal(|ui| {
+                    if ui.small_button("Refresh presets").clicked() {
+                        self.refresh_presets();
+                    }
+                    ui.checkbox(&mut self.auto_reload_presets, "Live reload");
+                    ui.checkbox(&mut self.show_text, "Visual labels [H]");
+                });
+
+                let query = self.visual_query.trim().to_lowercase();
+                let mut entries = vec![
+                    (
+                        "host.neon-scope".to_owned(),
+                        "Neon Scope".to_owned(),
+                        "Foundation",
+                        None,
+                    ),
+                    (
+                        "host.particle-forge".to_owned(),
+                        "Particle Forge".to_owned(),
+                        "Foundation",
+                        None,
+                    ),
+                    (
+                        "host.performance-studio".to_owned(),
+                        "Studio · Living Photograph".to_owned(),
+                        "Studio",
+                        None,
+                    ),
+                ];
+                entries.extend(self.presets.iter().enumerate().map(|(index, preset)| {
+                    (
+                        preset.id.clone(),
+                        preset.name.clone(),
+                        preset_category(&preset.id),
+                        Some(index),
+                    )
+                }));
+                entries.sort_by_key(|(id, _, _, _)| {
+                    std::cmp::Reverse(self.favorite_visuals.iter().any(|item| item == id))
+                });
+
+                let active_id = self.active_scene_identity().ok().map(|(id, _)| id);
+                let mut activate = None;
+                let mut favorite = None;
+                for category in [
+                    "Foundation",
+                    "Spectrum",
+                    "Cyber",
+                    "Cosmic",
+                    "Energy",
+                    "Organic",
+                    "Architecture",
+                    "Studio",
+                ] {
+                    let filtered = entries
+                        .iter()
+                        .filter(|(_, name, family, _)| {
+                            *family == category
+                                && (query.is_empty()
+                                    || name.to_lowercase().contains(&query)
+                                    || family.to_lowercase().contains(&query))
+                        })
+                        .collect::<Vec<_>>();
+                    if filtered.is_empty() {
+                        continue;
+                    }
+                    ui.separator();
+                    ui.strong(category.to_uppercase());
+                    for (id, name, _, preset_index) in filtered {
+                        let is_favorite = self.favorite_visuals.iter().any(|item| item == id);
+                        let details = preset_index.map(|index| {
+                            let preset = &self.presets[index];
+                            format!(
+                                "format {} · {} · {} · {} · {}",
+                                preset.format,
+                                preset.version,
+                                preset.author,
+                                preset.license,
+                                preset.path.display()
+                            )
+                        });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .small_button(if is_favorite { "★" } else { "☆" })
+                                .clicked()
+                            {
+                                favorite = Some(id.clone());
+                            }
+                            let response =
+                                ui.selectable_label(active_id.as_ref() == Some(id), name);
+                            let response = if let Some(details) = &details {
+                                response.on_hover_text(details)
+                            } else {
+                                response
+                            };
+                            if response.clicked() {
+                                activate = Some((id.clone(), *preset_index));
+                            }
+                        });
+                    }
+                }
+                if let Some(id) = favorite {
+                    if let Some(index) = self.favorite_visuals.iter().position(|item| item == &id) {
+                        self.favorite_visuals.remove(index);
+                    } else if self.favorite_visuals.len() < 32 {
+                        self.favorite_visuals.push(id);
+                    }
+                }
+                if let Some((id, preset_index)) = activate {
+                    match id.as_str() {
+                        "host.neon-scope" => self.visual = 0,
+                        "host.particle-forge" => self.visual = 1,
+                        "host.performance-studio" => self.visual = 3,
+                        _ => {
+                            if let Some(index) = preset_index {
+                                self.visual = 2;
+                                self.load_preset(index);
+                            }
+                        }
+                    }
+                }
+            });
+        self.visual_library_panel = open;
+    }
+
     fn draw_instrument_panel(&mut self, ctx: &egui::Context) {
         let mut open = self.instrument_panel;
         egui::Window::new("INSTRUMENT")
@@ -4479,7 +4622,10 @@ impl VisualizerApp {
                     self.load_preset(index);
                 }
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.show_text, "Show visual text [L]");
+                    ui.checkbox(&mut self.show_text, "Show visual text [H]");
+                    if ui.button("Library [L]").clicked() {
+                        self.visual_library_panel = true;
+                    }
                     if ui.button("Mode controls [O]").clicked() {
                         self.mode_panel = true;
                     }
@@ -5402,6 +5548,9 @@ impl eframe::App for VisualizerApp {
         if self.overlay && self.show_text {
             self.draw_overlay(ui.ctx());
         }
+        if self.visual_library_panel {
+            self.draw_visual_library(ui.ctx());
+        }
         if self.instrument_panel {
             self.draw_instrument_panel(ui.ctx());
         }
@@ -5619,6 +5768,26 @@ fn status_hint(status: &str, source: Option<SourceKind>) -> Option<&'static str>
     }
 }
 
+fn preset_category(id: &str) -> &'static str {
+    match id {
+        "thevisualizer.cascading-falls" => "Spectrum",
+        "thevisualizer.neon-horizon"
+        | "thevisualizer.feedback-tunnel"
+        | "thevisualizer.data-storm"
+        | "thevisualizer.quantum-lattice" => "Cyber",
+        "thevisualizer.gravity-wells" | "thevisualizer.event-horizon" => "Cosmic",
+        "thevisualizer.solar-bloom"
+        | "thevisualizer.aurora-flow"
+        | "thevisualizer.plasma-loom"
+        | "thevisualizer.liquid-chrome" => "Energy",
+        "thevisualizer.ripple-garden" | "thevisualizer.fractal-reef" => "Organic",
+        "thevisualizer.cityscape"
+        | "thevisualizer.spectral-cathedral"
+        | "thevisualizer.bass-monoliths" => "Architecture",
+        _ => "Foundation",
+    }
+}
+
 fn preset_directory() -> PathBuf {
     resource_directory("THEVISUALIZER_PRESETS", "presets")
 }
@@ -5652,13 +5821,34 @@ fn resource_directory(environment: &str, folder: &str) -> PathBuf {
     if let Some(path) = std::env::var_os(environment) {
         return path.into();
     }
-    let beside_executable = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.join(folder)));
-    if let Some(path) = beside_executable.filter(|path| path.is_dir()) {
-        path
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(path) = executable
+            .parent()
+            .map(|parent| parent.join(folder))
+            .filter(|path| path.is_dir())
+        {
+            return path;
+        }
+        if let Some(path) =
+            cargo_resource_directory(&executable, folder).filter(|path| path.is_dir())
+        {
+            return path;
+        }
+    }
+    PathBuf::from(folder)
+}
+
+fn cargo_resource_directory(executable: &Path, folder: &str) -> Option<PathBuf> {
+    let profile = executable.parent()?;
+    let target = profile.parent()?;
+    if target
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("target")
+    {
+        Some(target.parent()?.join(folder))
     } else {
-        PathBuf::from(folder)
+        None
     }
 }
 
@@ -5667,12 +5857,22 @@ mod tests {
     use super::{
         ColorSystem, DefaultSwitchTiming, Features, FrameLimit, FrameStats, InteractionState,
         LatencyStats, MAX_SOUND_ZONES, OnsetStats, PalettePreset, PresentationMode, SourceKind,
-        VisualHistory, ZoneBand, callback_is_new, default_needs_recovery, lerp_color,
-        living_photo_plant_mask, pacing_delay, rare_bird_progress, shifted_frequency, status_hint,
-        visual_index_for_key,
+        VisualHistory, ZoneBand, callback_is_new, cargo_resource_directory, default_needs_recovery,
+        lerp_color, living_photo_plant_mask, pacing_delay, rare_bird_progress, shifted_frequency,
+        status_hint, visual_index_for_key,
     };
     use eframe::egui::Pos2;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn cargo_release_finds_repository_resources() {
+        let executable =
+            std::path::Path::new(r"F:\Ai\TheVisualizer\target\release\thevisualizer.exe");
+        assert_eq!(
+            cargo_resource_directory(executable, "presets"),
+            Some(std::path::PathBuf::from(r"F:\Ai\TheVisualizer\presets"))
+        );
+    }
 
     #[test]
     fn default_following_respects_pins_and_retries_failure() {
