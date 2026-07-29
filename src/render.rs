@@ -145,10 +145,6 @@ impl GpuPresetRenderer {
         &self.adapter_name
     }
 
-    pub fn paint(&self, painter: &egui::Painter, rect: egui::Rect, frame: PresetFrame<'_>) {
-        self.paint_with_opacity(painter, rect, frame, 1.0);
-    }
-
     pub fn paint_with_opacity(
         &self,
         painter: &egui::Painter,

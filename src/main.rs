@@ -1,5 +1,6 @@
 mod analysis;
 mod audio;
+mod control;
 mod forge_model;
 mod particle_forge;
 mod performance;
@@ -19,6 +20,7 @@ use std::{
 
 use analysis::{Analyzer, FFT_SIZE, Features};
 use audio::{AudioCapture, AudioDevice, SampleBuffer, SharedSamples, SourceKind};
+use control::{ControlEvent, ControlHub};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
 use forge_model::ForgeModel;
@@ -747,12 +749,16 @@ struct VisualizerApp {
     presets: Vec<Preset>,
     preset_directory: PathBuf,
     preset_error: Option<String>,
+    preset_signature: u64,
+    last_preset_watch: Instant,
+    auto_reload_presets: bool,
     gpu_state: Option<RenderState>,
     particle_forge_renderer: Option<ParticleForgeRenderer>,
     particle_forge_error: Option<String>,
     particle_forge: ParticleForgeState,
     performance: PerformanceState,
     performance_renderers: [Option<GpuPresetRenderer>; 2],
+    controls: ControlHub,
     gpu_preset: Option<GpuPresetRenderer>,
     plugins: Vec<PluginPackage>,
     plugin_directory: PathBuf,
@@ -778,6 +784,7 @@ impl VisualizerApp {
         visuals.selection.bg_fill = Color32::from_rgb(0, 220, 190);
         creation.egui_ctx.set_visuals(visuals);
         let preset_directory = preset_directory();
+        let preset_signature = preset::directory_signature(&preset_directory);
         let discovery = preset::discover(&preset_directory);
         let mut preset_errors = discovery.errors;
         let gpu_state = creation.wgpu_render_state.clone();
@@ -897,12 +904,16 @@ impl VisualizerApp {
             presets: discovery.presets,
             preset_directory,
             preset_error,
+            preset_signature,
+            last_preset_watch: started,
+            auto_reload_presets: true,
             gpu_state,
             particle_forge_renderer,
             particle_forge_error,
             particle_forge: ParticleForgeState::default(),
             performance,
             performance_renderers,
+            controls: ControlHub::new(),
             gpu_preset,
             plugins: plugin_discovery.packages,
             plugin_directory,
@@ -1127,6 +1138,11 @@ impl VisualizerApp {
             (Some(error), None) | (None, Some(error)) => Some(error),
             (None, None) => None,
         };
+        self.preset_signature = preset::directory_signature(&self.preset_directory);
+        let sources = self.performance.decks.clone();
+        for (index, source) in sources.iter().enumerate() {
+            self.assign_performance_source(index, &source.mode_id, &source.mode_name);
+        }
     }
 
     fn cycle_preset(&mut self, forward: bool) {
@@ -1934,6 +1950,15 @@ impl VisualizerApp {
         self.show_text = true;
         self.particle_forge.reset();
         self.performance.reset();
+        let default_decks = self
+            .presets
+            .iter()
+            .take(2)
+            .map(|preset| (preset.id.clone(), preset.name.clone()))
+            .collect::<Vec<_>>();
+        for (deck, (mode_id, mode_name)) in default_decks.into_iter().enumerate() {
+            self.assign_performance_source(deck, &mode_id, &mode_name);
+        }
         if self.visual == 2
             && let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
                 self.presets
@@ -2137,7 +2162,7 @@ impl VisualizerApp {
         match self.visual {
             0 => self.draw_scope_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
             1 => self.draw_particle_forge_gpu(painter, rect),
-            2 => self.draw_gpu_preset_layer(painter, rect, 1.0),
+            2 => self.draw_gpu_preset_layer(painter, rect, 1.0, 1.0),
             _ if self.performance.live_mix => self.draw_performance_mix(painter, rect),
             _ => self.draw_studio(painter, rect),
         }
@@ -2151,6 +2176,9 @@ impl VisualizerApp {
         let scene = self.preset_scene_state();
         for deck_index in 0..2 {
             let deck = &self.performance.decks[deck_index];
+            if deck.mode_id.starts_with("host.") {
+                continue;
+            }
             let Some(renderer) = &self.performance_renderers[deck_index] else {
                 continue;
             };
@@ -2249,7 +2277,7 @@ impl VisualizerApp {
         );
     }
 
-    fn draw_gpu_preset_layer(&self, painter: &egui::Painter, rect: Rect, drive: f32) {
+    fn draw_gpu_preset_layer(&self, painter: &egui::Painter, rect: Rect, drive: f32, opacity: f32) {
         let Some(renderer) = &self.gpu_preset else {
             self.draw_tunnel(painter, rect);
             return;
@@ -2269,7 +2297,7 @@ impl VisualizerApp {
             .unwrap_or(0);
         let response = self.gain * self.plugin_multiplier * drive;
         parameters[response_index] = response;
-        renderer.paint(
+        renderer.paint_with_opacity(
             painter,
             rect,
             PresetFrame {
@@ -2289,6 +2317,7 @@ impl VisualizerApp {
                 scene: &scene,
                 parameters: &parameters,
             },
+            opacity,
         );
         if self.show_text && renderer.active_id() == "thevisualizer.cascading-falls" {
             self.draw_waterfall_labels(painter, rect);
@@ -2347,15 +2376,25 @@ impl VisualizerApp {
             }
             let energy = self.studio_energy(layer.band);
             let drive = layer.scale * (0.35 + energy * layer.reactivity);
+            let layer_rect = rect.translate(Vec2::new(
+                layer.position[0] * rect.width(),
+                layer.position[1] * rect.height(),
+            ));
             match layer.kind {
                 StudioLayerKind::Image => self.draw_studio_image(painter, rect, layer, energy),
-                StudioLayerKind::Preset => self.draw_gpu_preset_layer(painter, rect, drive),
+                StudioLayerKind::Preset => {
+                    self.draw_gpu_preset_layer(painter, layer_rect, drive, layer.opacity)
+                }
                 StudioLayerKind::Waveform => {
-                    self.draw_scope_layer(painter, rect, layer.opacity, layer.blend, drive)
+                    self.draw_scope_layer(painter, layer_rect, layer.opacity, layer.blend, drive)
                 }
-                StudioLayerKind::Particles => {
-                    self.draw_particles_layer(painter, rect, layer.opacity, layer.blend, drive)
-                }
+                StudioLayerKind::Particles => self.draw_particles_layer(
+                    painter,
+                    layer_rect,
+                    layer.opacity,
+                    layer.blend,
+                    drive,
+                ),
             }
         }
     }
@@ -2397,8 +2436,8 @@ impl VisualizerApp {
         uv_width = (uv_width / zoom).clamp(0.05, 1.0);
         uv_height = (uv_height / zoom).clamp(0.05, 1.0);
         let center = Pos2::new(
-            0.5 + self.interaction.camera_yaw.sin() * 0.08,
-            0.5 + self.interaction.camera_pitch * 0.08,
+            0.5 + self.interaction.camera_yaw.sin() * 0.08 + layer.position[0] * 0.25,
+            0.5 + self.interaction.camera_pitch * 0.08 + layer.position[1] * 0.25,
         );
         let uv = Rect::from_center_size(
             Pos2::new(
@@ -2408,16 +2447,26 @@ impl VisualizerApp {
             Vec2::new(uv_width, uv_height),
         );
         if let Some(motion) = &image.motion {
+            let display_uv = Rect {
+                min: Pos2::new(
+                    if layer.mirror_x { uv.max.x } else { uv.min.x },
+                    if layer.mirror_y { uv.max.y } else { uv.min.y },
+                ),
+                max: Pos2::new(
+                    if layer.mirror_x { uv.min.x } else { uv.max.x },
+                    if layer.mirror_y { uv.min.y } else { uv.max.y },
+                ),
+            };
             painter.image(
                 image.texture.id(),
                 rect,
-                uv,
+                display_uv,
                 Color32::from_white_alpha((255.0 * layer.opacity.clamp(0.0, 1.0)) as u8),
             );
             painter.image(
                 motion.texture.id(),
                 rect,
-                uv,
+                display_uv,
                 Color32::from_white_alpha(
                     (255.0 * layer.opacity.clamp(0.0, 1.0) * motion.mix) as u8,
                 ),
@@ -2442,6 +2491,12 @@ impl VisualizerApp {
             for column in 0..=COLUMNS {
                 let point = Vec2::new(column as f32 / COLUMNS as f32, row as f32 / ROWS as f32);
                 let mut source = uv.min + point * uv.size();
+                if layer.mirror_x {
+                    source.x = uv.max.x - (source.x - uv.min.x);
+                }
+                if layer.mirror_y {
+                    source.y = uv.max.y - (source.y - uv.min.y);
+                }
                 let plants = living_photo_plant_mask(source);
                 let table = soft_ellipse(source, Pos2::new(0.54, 0.57), Vec2::new(0.19, 0.13));
                 let frog = soft_ellipse(source, Pos2::new(0.555, 0.545), Vec2::new(0.055, 0.045));
@@ -3108,6 +3163,7 @@ impl VisualizerApp {
                                         }
                                     });
                                 refresh = ui.button("Refresh").clicked();
+                                ui.checkbox(&mut self.auto_reload_presets, "Live reload");
                             });
                             if let Some(index) = selected {
                                 self.load_preset(index);
@@ -3442,17 +3498,23 @@ impl VisualizerApp {
         }
 
         if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
-            if layer.kind != StudioLayerKind::Preset {
-                ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
-            } else {
-                ui.label(
-                    egui::RichText::new("Opaque base layer · choose the active preset below")
-                        .small()
-                        .color(Color32::from_rgb(125, 150, 170)),
-                );
-            }
+            ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
             ui.add(egui::Slider::new(&mut layer.reactivity, 0.0..=2.0).text("Reactivity"));
             ui.add(egui::Slider::new(&mut layer.scale, 0.35..=2.0).text("Scale"));
+            if layer.kind != StudioLayerKind::Preset {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(&mut layer.position[0], -1.0..=1.0).text("Position X"),
+                    );
+                    ui.add(egui::Slider::new(&mut layer.position[1], -1.0..=1.0).text("Y"));
+                });
+                if layer.kind == StudioLayerKind::Image {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut layer.mirror_x, "Mirror X");
+                        ui.checkbox(&mut layer.mirror_y, "Mirror Y");
+                    });
+                }
+            }
             ui.horizontal(|ui| {
                 ui.label("Audio");
                 egui::ComboBox::from_id_salt("studio-band")
@@ -3477,6 +3539,39 @@ impl VisualizerApp {
                 }
             });
         }
+        egui::CollapsingHeader::new(format!(
+            "MEDIA BIN · {}/{}",
+            self.studio.media_bin.len(),
+            studio::MAX_MEDIA_BIN
+        ))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Drop PNG, JPEG, static WebP, or animated WebP onto the canvas.",
+                )
+                .small(),
+            );
+            let mut activate = None;
+            for (index, path) in self.studio.media_bin.iter().enumerate() {
+                if ui
+                    .selectable_label(
+                        self.studio.selected_media == index,
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("media"),
+                    )
+                    .on_hover_text(path.display().to_string())
+                    .clicked()
+                {
+                    activate = Some(index);
+                }
+            }
+            if let Some(index) = activate
+                && let Err(error) = self.studio.activate_media(ui.ctx(), index)
+            {
+                self.studio.notice = Some(error);
+            }
+        });
         if self
             .studio
             .layers
@@ -3751,7 +3846,11 @@ impl VisualizerApp {
             return;
         };
         let Some(preset) = self.presets.iter().find(|preset| preset.id == mode_id) else {
-            *slot = None;
+            if !mode_id.starts_with("host.") {
+                self.scene_notice = Some(format!(
+                    "Deck retained its last working shader because `{mode_name}` did not reload."
+                ));
+            }
             return;
         };
         let result = if let Some(renderer) = slot {
@@ -3821,6 +3920,29 @@ impl VisualizerApp {
             }
             9 => self.colors.saturation = value * 1.5,
             _ => {}
+        }
+    }
+
+    fn apply_control_events(&mut self) {
+        for event in self.controls.drain() {
+            match event {
+                ControlEvent::Macro(index, value) if index < PERFORMANCE_MACROS => {
+                    self.performance.macros[index].value = value;
+                    self.apply_performance_macro(index, value);
+                }
+                ControlEvent::Crossfader(value) => {
+                    self.performance.crossfader = value.clamp(0.0, 1.0);
+                }
+                ControlEvent::Blackout(value) => self.performance.blackout = value,
+                ControlEvent::LiveMix(value) => {
+                    self.performance.live_mix = value;
+                    if value {
+                        self.visual = 3;
+                    }
+                }
+                ControlEvent::Take(deck) => self.load_performance_deck(deck),
+                ControlEvent::Macro(_, _) => {}
+            }
         }
     }
 
@@ -3958,6 +4080,76 @@ impl VisualizerApp {
                     ui.checkbox(&mut self.performance.blackout, "Blackout");
                 });
                 ui.separator();
+                egui::CollapsingHeader::new(format!("SCENE BROWSER · {}", self.scenes.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.text_edit_singleline(&mut self.performance.scene_query)
+                            .on_hover_text("Filter saved scenes by name or visual mode");
+                        let query = self.performance.scene_query.trim().to_lowercase();
+                        let mut indices = (0..self.scenes.len())
+                            .filter(|index| {
+                                let scene = &self.scenes[*index].snapshot;
+                                query.is_empty()
+                                    || scene.name.to_lowercase().contains(&query)
+                                    || scene.mode_name.to_lowercase().contains(&query)
+                            })
+                            .collect::<Vec<_>>();
+                        indices.sort_by_key(|index| {
+                            let scene = &self.scenes[*index].snapshot;
+                            let key = format!("{}:{}", scene.mode_id, scene.name);
+                            std::cmp::Reverse(
+                                self.performance
+                                    .favorite_scenes
+                                    .iter()
+                                    .any(|item| item == &key),
+                            )
+                        });
+                        let mut favorite = None;
+                        let mut restore = None;
+                        let mut assign_scene = None;
+                        for index in indices.into_iter().take(24) {
+                            let scene = &self.scenes[index].snapshot;
+                            let key = format!("{}:{}", scene.mode_id, scene.name);
+                            let is_favorite = self
+                                .performance
+                                .favorite_scenes
+                                .iter()
+                                .any(|item| item == &key);
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .small_button(if is_favorite { "★" } else { "☆" })
+                                    .clicked()
+                                {
+                                    favorite = Some(key.clone());
+                                }
+                                ui.label(&scene.name).on_hover_text(format!(
+                                    "{} · {}",
+                                    scene.mode_name, scene.mode_id
+                                ));
+                                if ui.small_button("Open").clicked() {
+                                    restore = Some(index);
+                                }
+                                if ui.small_button("A").clicked() {
+                                    assign_scene =
+                                        Some((0, scene.mode_id.clone(), scene.mode_name.clone()));
+                                }
+                                if ui.small_button("B").clicked() {
+                                    assign_scene =
+                                        Some((1, scene.mode_id.clone(), scene.mode_name.clone()));
+                                }
+                            });
+                        }
+                        if let Some(key) = favorite {
+                            self.performance.toggle_favorite(&key);
+                        }
+                        if let Some((deck, mode_id, mode_name)) = assign_scene {
+                            self.assign_performance_source(deck, &mode_id, &mode_name);
+                        }
+                        if let Some(index) = restore {
+                            self.restore_scene(index);
+                        }
+                    });
+                ui.separator();
                 ui.strong("PERFORMANCE MACROS");
                 let mut changed_macro = None;
                 for index in 0..PERFORMANCE_MACROS {
@@ -4018,6 +4210,83 @@ impl VisualizerApp {
                     ui.add(egui::Slider::new(&mut control.curve, 0.25..=4.0).text("Curve"));
                     ui.checkbox(&mut control.inverted, "Invert");
                 });
+                ui.separator();
+                egui::CollapsingHeader::new("EXTERNAL CONTROL")
+                    .show(ui, |ui| {
+                        ui.strong("MIDI");
+                        ui.horizontal(|ui| {
+                            let selected_name = self
+                                .controls
+                                .midi
+                                .ports
+                                .get(self.controls.midi.selected)
+                                .map_or("No MIDI inputs", String::as_str);
+                            egui::ComboBox::from_id_salt("performance-midi-input")
+                                .selected_text(selected_name)
+                                .show_ui(ui, |ui| {
+                                    for (index, name) in
+                                        self.controls.midi.ports.iter().enumerate()
+                                    {
+                                        ui.selectable_value(
+                                            &mut self.controls.midi.selected,
+                                            index,
+                                            name,
+                                        );
+                                    }
+                                });
+                            if ui.small_button("Refresh").clicked() {
+                                self.controls.midi.refresh();
+                            }
+                            if self.controls.midi.connected.is_some() {
+                                if ui.small_button("Disconnect").clicked() {
+                                    self.controls.midi.disconnect();
+                                }
+                            } else if ui
+                                .add_enabled(
+                                    !self.controls.midi.ports.is_empty(),
+                                    egui::Button::new("Connect"),
+                                )
+                                .clicked()
+                            {
+                                self.controls.midi.connect();
+                            }
+                        });
+                        if let Some(name) = &self.controls.midi.connected {
+                            ui.label(format!("Connected · {name}"));
+                        }
+                        ui.small(
+                            "CC 0–9 macros · CC 10 crossfader · CC 11 blackout · CC 12 live · notes 36/37 take",
+                        );
+
+                        ui.add_space(6.0);
+                        ui.strong("OSC");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut self.controls.osc.port)
+                                    .range(1_024..=65_535)
+                                    .prefix("127.0.0.1:"),
+                            );
+                            if self.controls.osc.running {
+                                if ui.small_button("Stop").clicked() {
+                                    self.controls.osc.stop();
+                                }
+                            } else if ui.small_button("Start").clicked() {
+                                self.controls.osc.start();
+                            }
+                        });
+                        ui.small(
+                            "/thevisualizer/macro/1..10 · /crossfader · /blackout · /live · /take/a · /take/b",
+                        );
+                        if let Some(error) = self
+                            .controls
+                            .midi
+                            .error
+                            .as_ref()
+                            .or(self.controls.osc.error.as_ref())
+                        {
+                            ui.colored_label(Color32::LIGHT_RED, error);
+                        }
+                    });
             });
         self.performance_panel = open;
     }
@@ -5042,7 +5311,7 @@ impl eframe::App for VisualizerApp {
             }
             let result = dropped.path.as_deref().map_or_else(
                 || Err("Only desktop file drops are supported.".to_owned()),
-                |path| self.studio.load_image(ctx, path),
+                |path| self.studio.load_media(ctx, path),
             );
             match result {
                 Ok(()) => {
@@ -5053,6 +5322,16 @@ impl eframe::App for VisualizerApp {
             }
         }
         self.update_default_device();
+        self.apply_control_events();
+        if self.auto_reload_presets
+            && self.last_preset_watch.elapsed() >= Duration::from_millis(500)
+        {
+            self.last_preset_watch = Instant::now();
+            let signature = preset::directory_signature(&self.preset_directory);
+            if signature != self.preset_signature {
+                self.refresh_presets();
+            }
+        }
         self.update_features();
         let macro_values = self.performance.update_macros(
             [
@@ -5144,7 +5423,7 @@ impl eframe::App for VisualizerApp {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "DROP IMAGE INTO STUDIO",
+                "DROP IMAGE OR ANIMATED WEBP INTO STUDIO",
                 egui::FontId::proportional(24.0),
                 Color32::from_rgb(90, 245, 220),
             );

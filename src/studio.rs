@@ -7,7 +7,8 @@ use std::{
 use eframe::egui::{self, TextureHandle, TextureOptions};
 use image::{AnimationDecoder, ImageReader, Limits, codecs::webp::WebPDecoder};
 
-pub const MAX_STUDIO_LAYERS: usize = 8;
+pub const MAX_STUDIO_LAYERS: usize = 10;
+pub const MAX_MEDIA_BIN: usize = 64;
 const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_EDGE: u32 = 8_192;
 const MAX_IMAGE_ALLOC_BYTES: u64 = 256 * 1024 * 1024;
@@ -84,6 +85,9 @@ pub struct StudioLayer {
     pub band: StudioBand,
     pub reactivity: f32,
     pub scale: f32,
+    pub position: [f32; 2],
+    pub mirror_x: bool,
+    pub mirror_y: bool,
 }
 
 impl StudioLayer {
@@ -97,6 +101,9 @@ impl StudioLayer {
                 band: StudioBand::Full,
                 reactivity: 0.65,
                 scale: 1.0,
+                position: [0.0, 0.0],
+                mirror_x: false,
+                mirror_y: false,
             },
             StudioLayerKind::Preset => Self {
                 kind,
@@ -106,6 +113,9 @@ impl StudioLayer {
                 band: StudioBand::Full,
                 reactivity: 0.8,
                 scale: 1.0,
+                position: [0.0, 0.0],
+                mirror_x: false,
+                mirror_y: false,
             },
             StudioLayerKind::Waveform => Self {
                 kind,
@@ -115,6 +125,9 @@ impl StudioLayer {
                 band: StudioBand::Mid,
                 reactivity: 0.9,
                 scale: 0.7,
+                position: [0.0, 0.0],
+                mirror_x: false,
+                mirror_y: false,
             },
             StudioLayerKind::Particles => Self {
                 kind,
@@ -124,6 +137,9 @@ impl StudioLayer {
                 band: StudioBand::Treble,
                 reactivity: 1.1,
                 scale: 0.72,
+                position: [0.0, 0.0],
+                mirror_x: false,
+                mirror_y: false,
             },
         }
     }
@@ -151,6 +167,8 @@ pub struct StudioState {
     pub selected: usize,
     pub image: Option<StudioImage>,
     pub notice: Option<String>,
+    pub media_bin: Vec<PathBuf>,
+    pub selected_media: usize,
 }
 
 impl Default for StudioState {
@@ -167,6 +185,8 @@ impl Default for StudioState {
             selected: 0,
             image: None,
             notice: None,
+            media_bin: Vec::new(),
+            selected_media: 0,
         }
     }
 }
@@ -221,6 +241,10 @@ impl StudioState {
     }
 
     pub fn load_image(&mut self, context: &egui::Context, path: &Path) -> Result<(), String> {
+        let existing = self.media_bin.iter().position(|item| item == path);
+        if existing.is_none() && self.media_bin.len() == MAX_MEDIA_BIN {
+            return Err(format!("Media bin is limited to {MAX_MEDIA_BIN} items"));
+        }
         let metadata = fs::metadata(path)
             .map_err(|error| format!("Could not inspect image {}: {error}", path.display()))?;
         if metadata.len() > MAX_IMAGE_FILE_BYTES {
@@ -256,8 +280,38 @@ impl StudioState {
             motion: None,
             rigged: false,
         });
+        self.selected_media = existing.unwrap_or_else(|| {
+            self.media_bin.push(path.to_owned());
+            self.media_bin.len() - 1
+        });
         self.notice = Some(format!("Loaded image · {}", path.display()));
         Ok(())
+    }
+
+    pub fn load_media(&mut self, context: &egui::Context, path: &Path) -> Result<(), String> {
+        self.load_image(context, path)?;
+        if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("webp"))
+        {
+            match self.load_motion(context, path) {
+                Ok(()) => {
+                    self.notice = Some(format!("Loaded animated media · {}", path.display()));
+                }
+                Err(error) if error.contains("not animated") => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn activate_media(&mut self, context: &egui::Context, index: usize) -> Result<(), String> {
+        let path = self
+            .media_bin
+            .get(index)
+            .cloned()
+            .ok_or_else(|| "Media item is no longer available".to_owned())?;
+        self.load_media(context, &path)
     }
 
     pub fn load_motion(&mut self, context: &egui::Context, path: &Path) -> Result<(), String> {
@@ -443,6 +497,7 @@ mod tests {
             )
             .unwrap();
         let size = studio.image.as_ref().unwrap().size;
+        assert_eq!(studio.media_bin.len(), 1);
         assert!(size[0] > size[1]);
         assert!(size[0] <= MAX_IMAGE_EDGE as usize);
         assert!(size[1] <= MAX_IMAGE_EDGE as usize);

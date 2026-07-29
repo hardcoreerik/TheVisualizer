@@ -189,6 +189,44 @@ pub fn discover(directory: &Path) -> PresetDiscovery {
     PresetDiscovery { presets, errors }
 }
 
+pub fn directory_signature(directory: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return 0;
+    };
+    let mut items = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("tvpreset"))
+        })
+        .take(512)
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            Some(format!(
+                "{}:{}:{modified}",
+                entry.file_name().to_string_lossy(),
+                metadata.len()
+            ))
+        })
+        .collect::<Vec<_>>();
+    items.sort();
+    items
+        .iter()
+        .flat_map(|item| item.bytes())
+        .fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
 fn parse_response(value: &str) -> Result<PresetParameter, String> {
     let parts = value.split('|').map(str::trim).collect::<Vec<_>>();
     if parts.len() != 4 || parts[0] != "response" {

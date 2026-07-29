@@ -17,7 +17,9 @@ eframe = { version = "0.35.0", default-features = false, features = ["accesskit"
 gltf = { version = "1.4.1", features = ["import"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 libloading = "0.8.9"
+midir = "0.11.0"
 pollster = "0.4.0"
+rosc = "0.11.4"
 rustfft = "6.4.1"
 sha2 = "0.10.9"
 thevisualizer-plugin-sdk = { path = "plugin-sdk" }

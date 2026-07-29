@@ -1,4 +1,5 @@
 pub const PERFORMANCE_MACROS: usize = 10;
+pub const MAX_FAVORITE_SCENES: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Deck {
@@ -159,6 +160,8 @@ pub struct PerformanceState {
     pub freeze_output: bool,
     pub macros: [MacroControl; PERFORMANCE_MACROS],
     pub selected_macro: usize,
+    pub scene_query: String,
+    pub favorite_scenes: Vec<String>,
 }
 
 impl Default for PerformanceState {
@@ -180,6 +183,8 @@ impl Default for PerformanceState {
             freeze_output: false,
             macros: [MacroControl::default(); PERFORMANCE_MACROS],
             selected_macro: 0,
+            scene_query: String::new(),
+            favorite_scenes: Vec::new(),
         }
     }
 }
@@ -213,6 +218,14 @@ impl PerformanceState {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub fn toggle_favorite(&mut self, key: &str) {
+        if let Some(index) = self.favorite_scenes.iter().position(|item| item == key) {
+            self.favorite_scenes.remove(index);
+        } else if self.favorite_scenes.len() < MAX_FAVORITE_SCENES {
+            self.favorite_scenes.push(key.to_owned());
+        }
     }
 
     pub fn update_macros(
@@ -314,6 +327,10 @@ impl PerformanceState {
                 u8::from(control.enabled),
             ));
         }
+        output.push_str(&format!("query={}\n", hex(&self.scene_query)));
+        for favorite in &self.favorite_scenes {
+            output.push_str(&format!("favorite={}\n", hex(favorite)));
+        }
         output
     }
 
@@ -325,6 +342,8 @@ impl PerformanceState {
         let mut state_values = None;
         let mut decks = Vec::new();
         let mut macros = Vec::new();
+        let mut scene_query = None;
+        let mut favorite_scenes = Vec::new();
         for line in source.lines().filter(|line| !line.is_empty()) {
             let (key, value) = line
                 .split_once('=')
@@ -336,12 +355,22 @@ impl PerformanceState {
                 "macro" if macros.len() < PERFORMANCE_MACROS => {
                     macros.push(parse_macro(value)?);
                 }
+                "query" => set_once(&mut scene_query, unhex(value)?)?,
+                "favorite" if favorite_scenes.len() < MAX_FAVORITE_SCENES => {
+                    favorite_scenes.push(unhex(value)?);
+                }
+                "favorite" => return Err("performance favorites exceed limits".to_owned()),
                 "deck" | "macro" => return Err("performance state exceeds limits".to_owned()),
                 _ => return Err(format!("unknown performance state key `{key}`")),
             }
         }
         if version != Some(1) || decks.len() != 2 || macros.len() != PERFORMANCE_MACROS {
             return Err("incomplete performance state".to_owned());
+        }
+        if scene_query.as_ref().is_some_and(|query| query.len() > 128)
+            || favorite_scenes.iter().any(|favorite| favorite.len() > 256)
+        {
+            return Err("performance browser text exceeds limits".to_owned());
         }
         let state_values = state_values.ok_or_else(|| "missing performance state".to_owned())?;
         let values = split::<10>(&state_values)?;
@@ -359,6 +388,8 @@ impl PerformanceState {
             freeze_output: parse_bool(values[9])?,
             macros: macros.try_into().map_err(|_| "missing macros".to_owned())?,
             selected_macro: 0,
+            scene_query: scene_query.unwrap_or_default(),
+            favorite_scenes,
         })
     }
 }

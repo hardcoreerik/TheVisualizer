@@ -28,6 +28,8 @@ The current development tree expands that proven three-direction baseline to two
 
 An experimental Studio slice now adds a bounded Image/GPU Preset/Waveform/Particles layer stack, native local-image drop, and one original photorealistic `Living Photograph` greenhouse composition. Its bundled 49-frame animated WebP supplies real plant, vine, rain, and puddle motion. An optional three-region 2.5D rig color-segments each current frame in memory and bends the left plant, right plant, and hanging growth around independent anchors: bass and mids drive broad movement, treble accelerates leaf detail, and onsets kick short gusts while the table, greenhouse frame, and visible frog remain stable. Optional graphic layers remain available but default off to preserve realism. The still, real-motion, and rigged compositions, layer controls, live/silent behavior, preset switching, camera interaction, windowed rendering, and 3440×1440 fullscreen rendering passed development-host visual checks. The motion revision passed an isolated package build, fresh extraction, and every staged checksum; its extracted executable launched, but packaged motion rendering still needs visual confirmation. Clean-machine validation remains open. Ten further Studio modes are specified in [Interactive Modes](docs/INTERACTIVE_MODES.md); they remain planned.
 
+The development tree now also includes a persistent Performance Studio: two independently tunable WGSL decks, full-frame GPU A/B mixing, scene search/favorites, ten transitions and audio-modulated macros, a ten-layer image/animated-WebP media stack, safe preset live reload, and bounded MIDI plus localhost OSC control. Host modes remain take-only. MP4/video/webcam input, ISF import, spatial transition masks, and external video output remain open.
+
 ## Milestone 2 — Windows audio foundation
 
 - Select the active output loopback or microphone source. Explicit selections remain pinned.
@@ -71,5 +73,5 @@ macOS and Linux use platform-native capture boundaries while sharing analysis, r
 - Marketplace or online account
 - Signed-plugin infrastructure
 - Legacy Winamp DLL loading
-- MIDI, OSC, sensor, telemetry, or network adapters
+- Sensor, telemetry, or broader network adapters
 - Mobile releases

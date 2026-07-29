@@ -24,9 +24,9 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - GPU-native Particle Forge compute simulation with 65,536–262,144 XYZ particles, toroidal motion, five topology families, three blendable material treatments, audio modulation routes, fixed quality profiles, and bounded `.glb` mesh attachment
 - Named `.tvscene` snapshots that restore the exact mode, relevant sliders, routed colors, material treatment, camera, and sound zones across application restarts
 - A local Visual Director with rolling Visual DNA, structured novelty-scored scene invention, 17 capture choices, controlled photographic imperfections, preflight critique, generation-ready prompts, durable local brief history, and Markdown brief export without making an API request
-- An experimental Studio layer stack for local images, GPU presets, waveform, and particles, with one original photorealistic `Living Photograph`, bounded real foliage motion, and an optional three-region 2.5D foliage rig
-- A persistent Performance Studio with two independently tunable GPU-preset decks, a live crossfader, ten transition curves, ten reusable macros, audio envelopes, speed/hue/level controls, freeze, mute, and blackout
-- Local `.tvpreset` discovery, format-2 grouped parameters, refresh, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and safe shader rejection
+- An experimental ten-layer Studio for local images, animated WebP, GPU presets, waveform, and particles, with a bounded media bin, position/mirror/opacity controls, one original photorealistic `Living Photograph`, real foliage motion, and an optional three-region 2.5D foliage rig
+- A persistent Performance Studio with two independently tunable GPU-preset decks, scene search/favorites, a live crossfader, ten transition curves, ten reusable macros, audio envelopes, speed/hue/level controls, freeze, mute, blackout, MIDI mapping, and localhost OSC control
+- Local `.tvpreset` discovery, format-2 grouped parameters, safe live reload, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and last-working-shader retention
 - A size-tagged C ABI, strict `.tvplugin` discovery, SHA-256 session approval, and repository-owned example plugin
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
 - A repository-owned waveform mark embedded as the native application/window icon
@@ -69,7 +69,7 @@ The implemented extension model has two tiers:
 
 Discovered native plugins remain disabled until the user reviews the exact artifact and selects `Approve & Load`. Approval lasts only for that run, is tied to the DLL's SHA-256 digest, and is not sandboxing or signing. See [Presets and Plugins](docs/PRESETS_AND_PLUGINS.md) and the [Plugin SDK](plugin-sdk/README.md).
 
-Future work may add MIDI, OSC, sensors, telemetry, and network inputs. Separate post-v0.1 research will explore standalone visualizers for ESP32-class displays, M5Tab5, and LED controllers. Desktop plugins and shaders are not assumed to run unchanged on embedded hardware.
+Performance Studio can receive MIDI CC/note mappings and localhost OSC messages through its External Control disclosure. Future work may add sensors, telemetry, and broader network inputs. Separate post-v0.1 research will explore standalone visualizers for ESP32-class displays, M5Tab5, and LED controllers. Desktop plugins and shaders are not assumed to run unchanged on embedded hardware.
 
 ## Documentation
 
