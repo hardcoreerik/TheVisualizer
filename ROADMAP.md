@@ -16,9 +16,10 @@ This document is the authority for milestone status. A milestone is complete onl
 ## Public repository state (2026-07-30)
 
 - Public remote: `https://github.com/hardcoreerik/TheVisualizer` (public).
-- `origin/main` remains the empty initialize commit `be7a8e0` (zero files). It is **not** a usable public source tree.
-- All implemented code and docs live on `docs/project-foundation` (`origin/docs/project-foundation` at last push, plus uncommitted local work).
-- No open or closed pull requests exist. Truth-sync and a review PR into `main` are required before any public-release claim.
+- `origin/main` remains the empty initialize commit `be7a8e0` (zero files). It is **not** a usable public source tree until PR merge.
+- All implemented code and docs live on `docs/project-foundation` (tip includes Event Horizon motion and doc truth-sync).
+- Open PR: [#1 Land Windows v0.1 development baseline on main](https://github.com/hardcoreerik/TheVisualizer/pull/1). Not merged.
+- Expanded portable package smoke on the development host passed 492/492 checksums and launched (see Project Truth). Clean-machine validation remains open.
 
 ## Milestone 1 — Documentation and feasibility — Complete
 
@@ -77,8 +78,8 @@ Remaining visual/performance acceptance for expanded modes is tracked under Mile
 
 Required for exit (see also [v0.1 Scope](docs/V0.1_SCOPE.md)):
 
-1. **Public source truth:** land `docs/project-foundation` into protected `main` via reviewed PR so the public default branch is not empty.
-2. **Expanded package smoke:** one current `scripts/package-windows.ps1` archive that includes the full preset/plugin/asset set; staged + fresh checksum; launch; capture; representative visual pass on the development host.
+1. **Public source truth:** merge PR #1 so protected `main` is no longer empty (review + explicit merge approval).
+2. **Expanded package smoke:** development-host archive + 492 checksums + launch recorded 2026-07-30; still need a fresh-extract live capture and representative visual pass, then clean-machine validation.
 3. **Clean-machine package validation:** first run, source selection, device loss/recovery, fullscreen exit, folder uninstall on a separate Windows machine.
 4. **Hardware breadth:** integrated or second GPU where available; mixed-DPI / multi-monitor when hardware exists.
 5. **Latency honesty:** external playback-to-display measurement; decide whether the 0–1000 ms default-device poll gap is acceptable for release notes.

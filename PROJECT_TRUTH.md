@@ -9,7 +9,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - `F:\Ai\TheVisualizer` began as an empty directory.
 - A Git repository was initialized with protected source-of-truth branch `main` and GitHub remote `origin` (`https://github.com/hardcoreerik/TheVisualizer`, public).
 - The implementation and documentation foundation is authored on `docs/project-foundation`; it is published as a review lane and is **not** merged into `main`.
-- On 2026-07-30, `origin/main` remained empty initialize commit `be7a8e0` (zero tree files). `origin/docs/project-foundation` tracked through Visual Canvas commit `aebd6f4`; local uncommitted work includes AI Studio/pack scripts, Event Horizon motion assets, and documentation truth-sync. No GitHub pull requests exist yet.
+- On 2026-07-30, `origin/main` remained empty initialize commit `be7a8e0` (zero tree files). `origin/docs/project-foundation` advanced through commit `d2ca239` (Event Horizon motion, AI pack lane, documentation truth-sync). Public PR [#1](https://github.com/hardcoreerik/TheVisualizer/pull/1) was opened to land the branch on `main`; it is not merged.
 - The development host runs Windows.
 - Rust `1.96.0`, Cargo `1.96.0`, Git `2.51.1.windows.1`, CMake, and Ninja were present on `PATH` during the initial scout.
 - Windows reported an AMD Radeon integrated GPU and an NVIDIA GeForce RTX 5070 Ti. Windows PnP currently marks the AMD adapter `CM_PROB_DISABLED`; NVIDIA reports `CM_PROB_NONE`.
@@ -101,6 +101,8 @@ This document records verified project state. Planned behavior belongs in the [R
 
 ## Runtime-observed results
 
+- On 2026-07-30, `scripts\package-windows.ps1` completed on the development host with the expanded inventory (35 `.tvpreset` files, 9 plugin manifests, Event Horizon motion WebPs, Studio assets). The collector resolved license material for 228 external target packages. Archive `dist\TheVisualizer-0.1.0-windows-x86_64-local-test.zip` is 17,667,988 bytes with SHA-256 `04C23CF40BA041813A956A94E1B57A38DEA88DD433865AB27DAD83BD6F8748E5`. A fresh extraction under `dist\pr-smoke-extract-20260730` passed all 492 staged payload checksums (0 failures), contained the three Event Horizon motion clips, and launched `thevisualizer.exe` (process remained alive for an 8-second observation before forced stop). This is a same-host expanded-package smoke, not clean-machine validation or a full visual/musical acceptance pass.
+- On 2026-07-30, `cargo check -p thevisualizer --locked` completed successfully on commit tip `d2ca239` after Event Horizon/AI Studio integration.
 - On 2026-07-29, the Visual Canvas pass completed `cargo test --workspace` with 52 player tests plus all plugin/SDK suites, production-target strict Clippy, formatting and diff checks, and `cargo build --workspace --locked --release`. Strict all-target Clippy remains blocked only by the previously present `field_reassign_with_default` test lint in `src/visual_director.rs:1218`. Visual interaction and performance acceptance remain open.
 - On 2026-07-29, `cargo test --workspace` passed 51 player tests plus the SDK, ABI-v1 example, and Creative Suite tests; every one of the nine manifests loaded and processed through its real DLL entry point. Strict workspace Clippy and the optimized workspace build passed. The corrected release packager staged nine package-relative manifests and both DLLs; all 478 recorded payload checksums matched. This is automated ABI/package validation, not live visual acceptance of each plugin profile.
 - On 2026-07-29, fresh preset discovery accepted all seventeen format-2 packages and a wgpu device validation scope compiled every bundled WGSL shader without an error. This is shader-contract validation, not visual or performance acceptance of the eight new scenes.
@@ -235,8 +237,8 @@ This document records verified project state. Planned behavior belongs in the [R
 
 ## Current gates
 
-1. Open and land a reviewed PR so public `main` is no longer an empty initialize commit (requires explicit approval to open/merge).
-2. Run one expanded `scripts/package-windows.ps1` smoke that matches the current preset/plugin/asset inventory; record staged and fresh checksums plus launch/capture on the development host.
+1. Review and merge PR #1 so public `main` is no longer an empty initialize commit (merge still requires explicit approval).
+2. ~~Expanded package smoke~~ recorded 2026-07-30 on the development host (checksums + launch). Remaining: live capture/visual pass from the fresh extract and clean-machine validation.
 3. Run an externally timestamped playback-to-display latency test and decide whether the default-device poll's unmeasured 0–1000 ms detection interval is acceptable.
 4. Enable the AMD display adapter outside TheVisualizer only when display disruption is acceptable, then rerun the forced WGSL probe; it is currently disabled by Windows with Code 22.
 5. Validate resize and presentation continuity on another system with multiple active monitors and mixed DPI; this host exposes one active 96-DPI HP X34.
