@@ -50,6 +50,7 @@ pub struct SceneSnapshot {
     pub parameters: [f32; SCENE_PARAMETER_COUNT],
     pub forge_state: Option<String>,
     pub performance_state: Option<String>,
+    pub canvas_state: Option<String>,
 }
 
 #[derive(Clone)]
@@ -166,7 +167,7 @@ fn encode(snapshot: &SceneSnapshot) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let mut source = format!(
-        "format=5\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
+        "format=6\nsaved_at_ms={}\nname={}\nmode_id={}\nmode_name={}\ngain={}\n\
          palette={}\nfinish={}\ncolors={colors}\nmaterial={},{},{}\n\
          color_motion={},{}\ncamera={},{},{}\nshow_handles={}\nselected_zone={}\nparameters={parameters}\n",
         snapshot.saved_at_ms,
@@ -214,6 +215,9 @@ fn encode(snapshot: &SceneSnapshot) -> String {
             hex_encode(performance_state)
         ));
     }
+    if let Some(canvas_state) = &snapshot.canvas_state {
+        source.push_str(&format!("canvas_state={}\n", hex_encode(canvas_state)));
+    }
     source
 }
 
@@ -236,6 +240,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
     let mut zones = Vec::new();
     let mut forge_state = None;
     let mut performance_state = None;
+    let mut canvas_state = None;
     for line in source.lines().filter(|line| !line.trim().is_empty()) {
         let (key, value) = line
             .split_once('=')
@@ -268,6 +273,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
             "performance_state" => {
                 set_once(&mut performance_state, hex_decode(value)?, key)?;
             }
+            "canvas_state" => set_once(&mut canvas_state, hex_decode(value)?, key)?,
             "zone" => {
                 if zones.len() == SCENE_ZONE_LIMIT {
                     return Err(format!("scene exceeds {SCENE_ZONE_LIMIT} zones"));
@@ -309,7 +315,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
             _ => return Err(format!("unknown scene key `{key}`")),
         }
     }
-    if !matches!(format, Some(1..=5)) {
+    if !matches!(format, Some(1..=6)) {
         return Err("unsupported or missing scene format".to_owned());
     }
     let material = material.ok_or_else(|| "missing `material`".to_owned())?;
@@ -337,6 +343,7 @@ fn decode(source: &str) -> Result<SceneSnapshot, String> {
         parameters: parameters.ok_or_else(|| "missing `parameters`".to_owned())?,
         forge_state,
         performance_state,
+        canvas_state,
     };
     validate(&snapshot)?;
     Ok(snapshot)
@@ -550,6 +557,7 @@ mod tests {
             parameters: [0.5; SCENE_PARAMETER_COUNT],
             forge_state: None,
             performance_state: None,
+            canvas_state: None,
         }
     }
 
@@ -584,7 +592,7 @@ mod tests {
     #[test]
     fn format_one_scene_migrates_without_forge_state() {
         let legacy = encode(&snapshot())
-            .replacen("format=5", "format=1", 1)
+            .replacen("format=6", "format=1", 1)
             .lines()
             .filter(|line| !line.starts_with("color_motion="))
             .map(|line| {

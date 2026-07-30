@@ -1,5 +1,6 @@
 mod analysis;
 mod audio;
+mod canvas;
 mod control;
 mod forge_model;
 mod particle_forge;
@@ -20,6 +21,10 @@ use std::{
 
 use analysis::{Analyzer, FFT_SIZE, Features};
 use audio::{AudioCapture, AudioDevice, SampleBuffer, SharedSamples, SourceKind};
+use canvas::{
+    CanvasBackground, CanvasBand, CanvasContent, CanvasFormKind, CanvasState, CanvasTool,
+    MAX_CANVAS_FORMS, transformed_points,
+};
 use control::{ControlEvent, ControlHub};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
@@ -46,8 +51,14 @@ use thevisualizer_plugin_sdk::{
 };
 use visual_director::{Aspect, CaptureProfile, OutputIntent, VisualDirector};
 
-const VISUAL_NAMES: [&str; 4] = ["NEON SCOPE", "PARTICLE FORGE", "GPU PRESET", "STUDIO"];
-const VISUAL_BUTTONS: [&str; 4] = ["1 Scope", "2 Particles", "3 Preset", "4 Studio"];
+const VISUAL_NAMES: [&str; 5] = [
+    "NEON SCOPE",
+    "PARTICLE FORGE",
+    "GPU PRESET",
+    "STUDIO",
+    "VISUAL CANVAS",
+];
+const VISUAL_BUTTONS: [&str; 5] = ["1 Scope", "2 Particles", "3 Preset", "4 Studio", "5 Canvas"];
 const DEFAULT_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const VISUAL_TRAIL_FRAMES: usize = 10;
 const MAX_SOUND_ZONES: usize = 8;
@@ -768,6 +779,7 @@ fn visual_index_for_key(key: egui::Key) -> Option<usize> {
         egui::Key::Num2 => Some(1),
         egui::Key::Num3 => Some(2),
         egui::Key::Num4 => Some(3),
+        egui::Key::Num5 => Some(4),
         _ => None,
     }
 }
@@ -831,6 +843,7 @@ struct VisualizerApp {
     features: Features,
     visual_history: VisualHistory,
     studio: StudioState,
+    canvas: CanvasState,
     interaction: InteractionState,
     colors: ColorSystem,
     mode_parameters: [f32; PRESET_PARAMETER_FLOATS],
@@ -1005,6 +1018,7 @@ impl VisualizerApp {
             features: Features::default(),
             visual_history: VisualHistory::default(),
             studio,
+            canvas: CanvasState::default(),
             interaction: InteractionState::default(),
             colors: ColorSystem::default(),
             mode_parameters,
@@ -1318,6 +1332,7 @@ impl VisualizerApp {
                     .ok_or_else(|| "The active preset is no longer available.".to_owned())?;
                 Ok((preset.id.clone(), preset.name.clone()))
             }
+            4 => Ok(("host.visual-canvas".to_owned(), "Visual Canvas".to_owned())),
             _ => Err("Studio compositions are session-only in this prototype.".to_owned()),
         }
     }
@@ -1376,6 +1391,7 @@ impl VisualizerApp {
             parameters: self.mode_parameters,
             forge_state: (self.visual == 1).then(|| self.particle_forge.encode_scene()),
             performance_state: Some(self.performance.encode_scene()),
+            canvas_state: (self.visual == 4).then(|| self.canvas.encode_scene()),
         })
     }
 
@@ -1442,9 +1458,28 @@ impl VisualizerApp {
         {
             return;
         }
+        let restored_canvas = if snapshot.mode_id == "host.visual-canvas" {
+            snapshot
+                .canvas_state
+                .as_deref()
+                .map_or_else(|| Ok(CanvasState::default()), CanvasState::decode_scene)
+                .map_err(|error| {
+                    self.scene_notice = Some(format!("Invalid Visual Canvas scene: {error}"));
+                })
+                .ok()
+        } else {
+            None
+        };
+        if snapshot.mode_id == "host.visual-canvas" && restored_canvas.is_none() {
+            return;
+        }
         match snapshot.mode_id.as_str() {
             "host.neon-scope" => self.visual = 0,
             "host.particle-forge" => self.visual = 1,
+            "host.visual-canvas" => {
+                self.visual = 4;
+                self.canvas = restored_canvas.unwrap_or_default();
+            }
             id => {
                 let Some(preset_index) = self.presets.iter().position(|preset| preset.id == id)
                 else {
@@ -1908,6 +1943,7 @@ impl VisualizerApp {
                 egui::Key::Num2,
                 egui::Key::Num3,
                 egui::Key::Num4,
+                egui::Key::Num5,
             ]
             .into_iter()
             .find(|key| input.key_pressed(*key))
@@ -1940,6 +1976,8 @@ impl VisualizerApp {
         if delete {
             if self.visual == 1 {
                 self.particle_forge.remove_selected();
+            } else if self.visual == 4 {
+                self.canvas.remove_selected();
             } else {
                 self.interaction.remove_selected();
             }
@@ -1947,6 +1985,8 @@ impl VisualizerApp {
         if reset {
             if self.visual == 1 {
                 self.particle_forge.reset();
+            } else if self.visual == 4 {
+                self.canvas.clear();
             } else {
                 self.reset_interaction();
             }
@@ -1969,11 +2009,33 @@ impl VisualizerApp {
         if forge {
             self.forge_panel = !self.forge_panel;
         }
-        if performance {
+        if performance && self.visual != 4 {
             self.performance_panel = !self.performance_panel;
         }
-        if borderless {
+        if borderless && self.visual != 4 {
             self.set_presentation(ctx, self.presentation.toggle_borderless());
+        }
+        if self.visual == 4 {
+            ctx.input(|input| {
+                if input.key_pressed(egui::Key::V) {
+                    self.canvas.tool = CanvasTool::Select;
+                }
+                if input.key_pressed(egui::Key::B) {
+                    self.canvas.tool = CanvasTool::Brush;
+                }
+                if input.key_pressed(egui::Key::P) {
+                    self.canvas.tool = CanvasTool::Pen;
+                }
+                if input.key_pressed(egui::Key::E) {
+                    self.canvas.tool = CanvasTool::Eraser;
+                }
+                if input.modifiers.command && input.key_pressed(egui::Key::Z) {
+                    self.canvas.undo();
+                }
+                if input.modifiers.command && input.key_pressed(egui::Key::Y) {
+                    self.canvas.redo();
+                }
+            });
         }
         if f11 {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
@@ -2000,6 +2062,10 @@ impl VisualizerApp {
     fn interact_visual(&mut self, response: &egui::Response, rect: Rect) {
         if self.visual == 1 {
             self.interact_forge(response, rect);
+            return;
+        }
+        if self.visual == 4 {
+            self.interact_canvas(response, rect);
             return;
         }
         let pointer = response.interact_pointer_pos();
@@ -2118,6 +2184,118 @@ impl VisualizerApp {
             if scroll != 0.0 {
                 self.interaction.camera_zoom =
                     (self.interaction.camera_zoom * (-scroll * 0.0015).exp()).clamp(0.35, 3.0);
+            }
+        }
+    }
+
+    fn interact_canvas(&mut self, response: &egui::Response, rect: Rect) {
+        let pointer = response.interact_pointer_pos();
+        if response.secondary_clicked()
+            && let Some(pointer) = pointer
+        {
+            self.canvas.select_at(CanvasState::normalize(rect, pointer));
+        }
+        response.context_menu(|ui| {
+            ui.strong("VISUAL CANVAS");
+            if let Some(index) = self
+                .canvas
+                .selected
+                .filter(|index| *index < self.canvas.forms.len())
+            {
+                let form = &mut self.canvas.forms[index];
+                ui.menu_button("Form type", |ui| {
+                    for kind in CanvasFormKind::ALL {
+                        if ui
+                            .selectable_value(&mut form.kind, kind, kind.label())
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("Visual content", |ui| {
+                    for content in CanvasContent::ALL {
+                        if ui
+                            .selectable_value(&mut form.content, content, content.label())
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("Audio source", |ui| {
+                    for band in CanvasBand::ALL {
+                        if ui
+                            .selectable_value(&mut form.band, band, band.label())
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    }
+                });
+                ui.checkbox(&mut form.filled, "Filled");
+                ui.checkbox(&mut form.visible, "Visible");
+                ui.checkbox(&mut form.locked, "Lock");
+                ui.separator();
+                if ui.button("Duplicate").clicked() {
+                    self.canvas.duplicate_selected();
+                    ui.close();
+                }
+                if ui.button("Delete").clicked() {
+                    self.canvas.remove_selected();
+                    ui.close();
+                }
+            } else {
+                ui.label("Draw a form or right-click one to edit it.");
+                if ui.button("Brush").clicked() {
+                    self.canvas.tool = CanvasTool::Brush;
+                    ui.close();
+                }
+                if ui.button("Rectangle").clicked() {
+                    self.canvas.tool = CanvasTool::Rectangle;
+                    ui.close();
+                }
+                if ui.button("Ellipse").clicked() {
+                    self.canvas.tool = CanvasTool::Ellipse;
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button("Undo").clicked() {
+                self.canvas.undo();
+                ui.close();
+            }
+            if ui.button("Redo").clicked() {
+                self.canvas.redo();
+                ui.close();
+            }
+            if ui.button("Clear canvas").clicked() {
+                self.canvas.clear();
+                ui.close();
+            }
+        });
+
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && let Some(pointer) = pointer
+        {
+            self.canvas.begin(CanvasState::normalize(rect, pointer));
+        }
+        if response.dragged_by(egui::PointerButton::Primary)
+            && let Some(pointer) = pointer
+        {
+            self.canvas.update(CanvasState::normalize(rect, pointer));
+        }
+        if response.drag_stopped_by(egui::PointerButton::Primary)
+            && let Some(pointer) = pointer
+        {
+            self.canvas.finish(CanvasState::normalize(rect, pointer));
+        } else if response.clicked_by(egui::PointerButton::Primary)
+            && let Some(pointer) = pointer
+        {
+            let point = CanvasState::normalize(rect, pointer);
+            self.canvas.begin(point);
+            if self.canvas.tool != CanvasTool::Select && self.canvas.tool != CanvasTool::Eraser {
+                self.canvas.finish(point);
             }
         }
     }
@@ -2291,6 +2469,7 @@ impl VisualizerApp {
         self.reset_interaction();
         self.colors = ColorSystem::default();
         self.studio = bundled_studio(ctx);
+        self.canvas = CanvasState::default();
         self.overlay = true;
         self.show_text = true;
         self.particle_forge.reset();
@@ -2442,6 +2621,54 @@ impl VisualizerApp {
         }
     }
 
+    fn draw_canvas_handles(&self, painter: &egui::Painter, rect: Rect) {
+        if !self.canvas.show_handles {
+            return;
+        }
+        if let Some(form) = self
+            .canvas
+            .selected
+            .and_then(|index| self.canvas.forms.get(index))
+            && let Some((min, max)) = form.bounds()
+        {
+            let bounds = Rect::from_min_max(
+                CanvasState::screen(rect, min),
+                CanvasState::screen(rect, max),
+            );
+            painter.rect_stroke(
+                bounds,
+                2.0,
+                Stroke::new(1.0, Color32::from_rgb(120, 255, 225)),
+                egui::StrokeKind::Outside,
+            );
+            for point in [
+                bounds.left_top(),
+                bounds.right_top(),
+                bounds.left_bottom(),
+                bounds.right_bottom(),
+            ] {
+                painter.rect_filled(
+                    Rect::from_center_size(point, Vec2::splat(7.0)),
+                    1.0,
+                    Color32::from_rgb(120, 255, 225),
+                );
+            }
+        }
+        if self.show_text {
+            painter.text(
+                rect.left_bottom() + Vec2::new(16.0, -16.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!(
+                    "{} · {} forms · right-click edits",
+                    self.canvas.tool.label(),
+                    self.canvas.forms.len()
+                ),
+                egui::FontId::monospace(12.0),
+                Color32::from_rgb(120, 210, 205),
+            );
+        }
+    }
+
     fn preset_scene_state(&self) -> [f32; PRESET_SCENE_FLOATS] {
         let mut state = [0.0; PRESET_SCENE_FLOATS];
         state[0] = self.interaction.zones.len() as f32;
@@ -2528,10 +2755,284 @@ impl VisualizerApp {
             0 => self.draw_scope_layer(painter, rect, 1.0, StudioBlend::Normal, 1.0),
             1 => self.draw_particle_forge_gpu(painter, rect),
             2 => self.draw_gpu_preset_layer(painter, rect, 1.0, 1.0),
+            4 => self.draw_canvas(painter, rect),
             _ if self.performance.live_mix => self.draw_performance_mix(painter, rect),
             _ => self.draw_studio(painter, rect),
         }
         self.draw_zone_overlay(painter, rect);
+    }
+
+    fn canvas_energy(&self, band: CanvasBand) -> f32 {
+        match band {
+            CanvasBand::Full => self.features.rms * 3.0,
+            CanvasBand::Bass => self.features.low,
+            CanvasBand::Mid => self.features.mid,
+            CanvasBand::Treble => self.features.high,
+            CanvasBand::Onset => self.features.onset.max(self.features.transient),
+        }
+        .clamp(0.0, 1.0)
+    }
+
+    fn canvas_color(&self, band: CanvasBand, phase: f32) -> Color32 {
+        let base = match band {
+            CanvasBand::Full | CanvasBand::Onset => self.colors.full,
+            CanvasBand::Bass => self.colors.bass,
+            CanvasBand::Mid => self.colors.mid,
+            CanvasBand::Treble => self.colors.treble,
+        };
+        shift_color(base, phase)
+    }
+
+    fn draw_canvas(&self, painter: &egui::Painter, rect: Rect) {
+        if self.canvas.show_background {
+            let opacity = self.canvas.background_opacity.clamp(0.0, 1.0);
+            match self.canvas.background {
+                CanvasBackground::Preset => self.draw_gpu_preset_layer(painter, rect, 1.0, opacity),
+                CanvasBackground::NeonScope => {
+                    self.draw_scope_layer(painter, rect, opacity, StudioBlend::Normal, 1.0)
+                }
+                CanvasBackground::ParticleForge => self.draw_particle_forge_gpu(painter, rect),
+                CanvasBackground::Studio => self.draw_studio(painter, rect),
+            }
+        }
+        let time = self.started.elapsed().as_secs_f32();
+        let phase = self.colors.phase(time);
+        for (index, form) in self.canvas.forms.iter().enumerate() {
+            if !form.visible || form.opacity <= 0.0 {
+                continue;
+            }
+            let energy = self.canvas_energy(form.band);
+            let audio_scale = 1.0 + energy * form.reactivity * 0.12;
+            let points = transformed_points(form, rect, audio_scale);
+            if points.len() < 2 {
+                continue;
+            }
+            let base = self
+                .canvas_color(form.band, phase + index as f32 * 0.047)
+                .gamma_multiply(form.opacity);
+            let accent = lerp_color(base, self.colors.full, 0.45 + energy * 0.4);
+            let width = form.stroke_width * (1.0 + energy * form.reactivity * 0.55);
+            let bounds = points
+                .iter()
+                .fold(Rect::from_min_max(points[0], points[0]), |bounds, point| {
+                    bounds.union(Rect::from_min_max(*point, *point))
+                });
+            match form.kind {
+                CanvasFormKind::Rectangle => {
+                    if form.filled {
+                        painter.rect_filled(bounds, 2.0, base.gamma_multiply(0.3 + energy * 0.25));
+                    }
+                    painter.rect_stroke(
+                        bounds,
+                        2.0,
+                        Stroke::new(width, accent),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                CanvasFormKind::Ellipse => {
+                    let radius = bounds.size() * 0.5;
+                    if form.filled {
+                        painter.add(egui::Shape::ellipse_filled(
+                            bounds.center(),
+                            radius,
+                            base.gamma_multiply(0.28 + energy * 0.25),
+                        ));
+                    }
+                    painter.add(egui::Shape::ellipse_stroke(
+                        bounds.center(),
+                        radius,
+                        Stroke::new(width, accent),
+                    ));
+                }
+                CanvasFormKind::Polygon => {
+                    if form.filled {
+                        painter.add(egui::Shape::convex_polygon(
+                            points.clone(),
+                            base.gamma_multiply(0.32 + energy * 0.28),
+                            Stroke::new(width, accent),
+                        ));
+                    } else {
+                        let mut closed = points.clone();
+                        closed.push(points[0]);
+                        painter.add(egui::Shape::line(closed, Stroke::new(width, accent)));
+                    }
+                }
+                CanvasFormKind::Ribbon | CanvasFormKind::Beam => {
+                    painter.add(egui::Shape::line(
+                        points.clone(),
+                        Stroke::new(
+                            width
+                                * if form.kind == CanvasFormKind::Beam {
+                                    1.8
+                                } else {
+                                    1.0
+                                },
+                            accent,
+                        ),
+                    ));
+                }
+            }
+            self.draw_canvas_content(painter, bounds, form.content, base, accent, energy, time);
+        }
+        if self.canvas.draft.len() >= 2 {
+            let points = self
+                .canvas
+                .draft
+                .iter()
+                .map(|point| CanvasState::screen(rect, *point))
+                .collect::<Vec<_>>();
+            painter.add(egui::Shape::line(
+                points,
+                Stroke::new(2.0, Color32::from_rgb(120, 255, 225)),
+            ));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_canvas_content(
+        &self,
+        painter: &egui::Painter,
+        bounds: Rect,
+        content: CanvasContent,
+        base: Color32,
+        accent: Color32,
+        energy: f32,
+        time: f32,
+    ) {
+        if bounds.width() < 3.0 || bounds.height() < 3.0 {
+            return;
+        }
+        let painter = painter.with_clip_rect(bounds);
+        match content {
+            CanvasContent::Solid => {}
+            CanvasContent::Gradient => {
+                for index in 0..8 {
+                    let t = index as f32 / 8.0;
+                    let strip = Rect::from_min_max(
+                        Pos2::new(bounds.left(), egui::lerp(bounds.top()..=bounds.bottom(), t)),
+                        Pos2::new(
+                            bounds.right(),
+                            egui::lerp(bounds.top()..=bounds.bottom(), t + 0.13),
+                        ),
+                    );
+                    painter.rect_filled(
+                        strip,
+                        0.0,
+                        lerp_color(base, accent, t).gamma_multiply(0.12),
+                    );
+                }
+            }
+            CanvasContent::Waveform | CanvasContent::Pulse => {
+                let mut wave = Vec::with_capacity(64);
+                for index in 0..64 {
+                    let source = index * 4;
+                    let x = egui::lerp(bounds.left()..=bounds.right(), index as f32 / 63.0);
+                    let y = bounds.center().y
+                        + self.features.waveform[source] * bounds.height() * (0.2 + energy * 0.18);
+                    wave.push(Pos2::new(x, y));
+                }
+                painter.add(egui::Shape::line(
+                    wave,
+                    Stroke::new(1.5 + energy * 3.0, accent),
+                ));
+                if content == CanvasContent::Pulse {
+                    painter.rect_stroke(
+                        bounds.expand(energy * 6.0),
+                        4.0,
+                        Stroke::new(1.0, accent.gamma_multiply(0.45)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+            CanvasContent::Spectrum => {
+                for index in 0..16 {
+                    let energy = (self.features.spectrum[index * 4] * self.gain).clamp(0.0, 1.0);
+                    let width = bounds.width() / 16.0;
+                    painter.rect_filled(
+                        Rect::from_min_max(
+                            Pos2::new(bounds.left() + index as f32 * width, bounds.bottom()),
+                            Pos2::new(
+                                bounds.left() + (index + 1) as f32 * width - 1.0,
+                                bounds.bottom() - energy * bounds.height(),
+                            ),
+                        ),
+                        1.0,
+                        lerp_color(base, accent, index as f32 / 15.0),
+                    );
+                }
+            }
+            CanvasContent::Particles => {
+                for index in 0..24 {
+                    let seed = (index * 73 + 19) as f32;
+                    let x = (seed.sin() * 43758.547).fract().abs();
+                    let y = ((seed + 31.0).sin() * 24634.635).fract().abs();
+                    let drift = (time * (0.12 + energy * 0.35) + y).fract();
+                    painter.circle_filled(
+                        Pos2::new(
+                            egui::lerp(bounds.left()..=bounds.right(), x),
+                            egui::lerp(bounds.bottom()..=bounds.top(), drift),
+                        ),
+                        1.0 + energy * 3.0,
+                        lerp_color(base, accent, y),
+                    );
+                }
+            }
+            CanvasContent::Grid => {
+                for index in 1..8 {
+                    let t = index as f32 / 8.0;
+                    painter.line_segment(
+                        [
+                            Pos2::new(egui::lerp(bounds.left()..=bounds.right(), t), bounds.top()),
+                            Pos2::new(
+                                egui::lerp(bounds.left()..=bounds.right(), t),
+                                bounds.bottom(),
+                            ),
+                        ],
+                        Stroke::new(1.0, accent.gamma_multiply(0.35)),
+                    );
+                    painter.line_segment(
+                        [
+                            Pos2::new(bounds.left(), egui::lerp(bounds.top()..=bounds.bottom(), t)),
+                            Pos2::new(
+                                bounds.right(),
+                                egui::lerp(bounds.top()..=bounds.bottom(), t),
+                            ),
+                        ],
+                        Stroke::new(1.0, accent.gamma_multiply(0.35)),
+                    );
+                }
+            }
+            CanvasContent::Halo => {
+                let radius = bounds.width().min(bounds.height()) * (0.24 + energy * 0.16);
+                painter.circle_stroke(
+                    bounds.center(),
+                    radius,
+                    Stroke::new(2.0 + energy * 4.0, accent),
+                );
+                painter.circle_stroke(
+                    bounds.center(),
+                    radius * 1.25,
+                    Stroke::new(1.0, base.gamma_multiply(0.5)),
+                );
+            }
+            CanvasContent::Orbits => {
+                for orbit in 0..5 {
+                    let angle = time * 0.12 + orbit as f32 * 0.62;
+                    let radius = Vec2::new(
+                        bounds.width() * (0.26 + orbit as f32 * 0.025),
+                        bounds.height() * (0.1 + orbit as f32 * 0.012),
+                    );
+                    let center =
+                        bounds.center() + Vec2::new(angle.cos(), angle.sin()) * energy * 3.0;
+                    painter.add(egui::Shape::ellipse_stroke(
+                        center,
+                        radius,
+                        Stroke::new(1.0 + energy, lerp_color(base, accent, orbit as f32 / 4.0)),
+                    ));
+                }
+                painter.circle_filled(bounds.center(), 3.0 + energy * 5.0, accent);
+            }
+        }
     }
 
     fn draw_zone_overlay(&self, painter: &egui::Painter, rect: Rect) {
@@ -3805,7 +4306,7 @@ impl VisualizerApp {
                             .color(Color32::from_rgb(110, 130, 150)),
                         )
                         .on_hover_text(
-                            "Left/Right cycles visuals; 1/2/3/4 selects one directly; Up/Down changes \
+                            "Left/Right cycles visuals; 1/2/3/4/5 selects one directly; Up/Down changes \
                              GPU presets; I opens the Instrument Panel; right-click/right-drag acts \
                              directly on the canvas; L opens the visual library; H hides visual text; Shift+R reverts session \
                              changes; Tab hides the overlay; Escape closes the panel or returns to \
@@ -4043,7 +4544,200 @@ impl VisualizerApp {
         }
     }
 
+    fn draw_canvas_controls(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            for tool in CanvasTool::ALL {
+                ui.selectable_value(&mut self.canvas.tool, tool, tool.label());
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "Draw freely. Closed strokes become forms; open strokes become ribbons; straight strokes become beams.",
+            )
+            .small()
+            .color(Color32::from_rgb(145, 190, 185)),
+        );
+        ui.horizontal(|ui| {
+            if ui.button("Undo").clicked() {
+                self.canvas.undo();
+            }
+            if ui.button("Redo").clicked() {
+                self.canvas.redo();
+            }
+            if ui.button("Duplicate").clicked() {
+                self.canvas.duplicate_selected();
+            }
+            if ui.button("Delete").clicked() {
+                self.canvas.remove_selected();
+            }
+            if ui.button("Clear").clicked() {
+                self.canvas.clear();
+            }
+        });
+
+        egui::CollapsingHeader::new("Animated Background")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.canvas.show_background, "Show");
+                    ui.add(
+                        egui::Slider::new(&mut self.canvas.background_opacity, 0.0..=1.0)
+                            .text("Opacity"),
+                    );
+                });
+                egui::ComboBox::from_id_salt("canvas-background-kind")
+                    .selected_text(self.canvas.background.label())
+                    .show_ui(ui, |ui| {
+                        for background in CanvasBackground::ALL {
+                            ui.selectable_value(
+                                &mut self.canvas.background,
+                                background,
+                                background.label(),
+                            );
+                        }
+                    });
+                let active_id = self.gpu_preset.as_ref().map(GpuPresetRenderer::active_id);
+                let active_name = active_id
+                    .and_then(|id| self.presets.iter().find(|preset| preset.id == id))
+                    .map_or("No valid preset", |preset| preset.name.as_str());
+                let mut chosen = None;
+                if self.canvas.background == CanvasBackground::Preset {
+                    egui::ComboBox::from_id_salt("canvas-background-preset")
+                        .selected_text(active_name)
+                        .width(285.0)
+                        .show_ui(ui, |ui| {
+                            for (index, preset) in self.presets.iter().enumerate() {
+                                if ui
+                                    .selectable_label(
+                                        active_id == Some(preset.id.as_str()),
+                                        &preset.name,
+                                    )
+                                    .clicked()
+                                {
+                                    chosen = Some(index);
+                                }
+                            }
+                        });
+                }
+                if let Some(index) = chosen {
+                    self.load_preset(index);
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "All Visual Library presets are available here. Existing plugins continue modulating the selected preset, palette, camera, zones, Forge, and performance controls.",
+                    )
+                    .small(),
+                );
+            });
+
+        egui::CollapsingHeader::new(format!(
+            "Form Layers · {}/{}",
+            self.canvas.forms.len(),
+            MAX_CANVAS_FORMS
+        ))
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut selected = None;
+            for (index, form) in self.canvas.forms.iter_mut().enumerate().rev() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut form.visible, "");
+                    if ui
+                        .selectable_label(
+                            self.canvas.selected == Some(index),
+                            format!(
+                                "{} · {} · {}",
+                                index + 1,
+                                form.kind.label(),
+                                form.content.label()
+                            ),
+                        )
+                        .clicked()
+                    {
+                        selected = Some(index);
+                    }
+                    ui.checkbox(&mut form.locked, "Lock");
+                });
+            }
+            if let Some(index) = selected {
+                self.canvas.selected = Some(index);
+            }
+            ui.horizontal(|ui| {
+                if ui.small_button("Forward").clicked() {
+                    self.canvas.move_selected_layer(1);
+                }
+                if ui.small_button("Back").clicked() {
+                    self.canvas.move_selected_layer(-1);
+                }
+                ui.checkbox(&mut self.canvas.show_handles, "Handles");
+            });
+        });
+
+        if let Some(form) = self
+            .canvas
+            .selected
+            .and_then(|index| self.canvas.forms.get_mut(index))
+        {
+            egui::CollapsingHeader::new("Selected Form")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("canvas-form-kind")
+                            .selected_text(form.kind.label())
+                            .show_ui(ui, |ui| {
+                                for kind in CanvasFormKind::ALL {
+                                    ui.selectable_value(&mut form.kind, kind, kind.label());
+                                }
+                            });
+                        egui::ComboBox::from_id_salt("canvas-form-content")
+                            .selected_text(form.content.label())
+                            .show_ui(ui, |ui| {
+                                for content in CanvasContent::ALL {
+                                    ui.selectable_value(
+                                        &mut form.content,
+                                        content,
+                                        content.label(),
+                                    );
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("canvas-form-band")
+                            .selected_text(format!("Audio · {}", form.band.label()))
+                            .show_ui(ui, |ui| {
+                                for band in CanvasBand::ALL {
+                                    ui.selectable_value(&mut form.band, band, band.label());
+                                }
+                            });
+                        ui.checkbox(&mut form.filled, "Filled");
+                    });
+                    ui.add(egui::Slider::new(&mut form.opacity, 0.0..=1.0).text("Opacity"));
+                    ui.add(
+                        egui::Slider::new(&mut form.reactivity, 0.0..=3.0).text("Audio reactivity"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut form.stroke_width, 0.5..=16.0).text("Stroke width"),
+                    );
+                    ui.add(egui::Slider::new(&mut form.scale, 0.2..=3.0).text("Scale"));
+                    ui.add(
+                        egui::Slider::new(
+                            &mut form.rotation,
+                            -std::f32::consts::TAU..=std::f32::consts::TAU,
+                        )
+                        .text("Rotation"),
+                    );
+                });
+        }
+        if let Some(notice) = &self.canvas.notice {
+            ui.colored_label(Color32::from_rgb(255, 180, 95), notice);
+        }
+    }
+
     fn draw_mode_controls(&mut self, ui: &mut egui::Ui) {
+        if self.visual == 4 {
+            self.draw_canvas_controls(ui);
+            return;
+        }
         let preset = self.gpu_preset.as_ref().and_then(|renderer| {
             self.presets
                 .iter()
@@ -4880,7 +5574,7 @@ impl VisualizerApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading(format!("{} VISUALS", self.presets.len() + 3));
+                    ui.heading(format!("{} VISUALS", self.presets.len() + 4));
                     ui.label(
                         egui::RichText::new("L close · H labels")
                             .small()
@@ -4916,6 +5610,12 @@ impl VisualizerApp {
                     (
                         "host.performance-studio".to_owned(),
                         "Studio · Living Photograph".to_owned(),
+                        "Studio",
+                        None,
+                    ),
+                    (
+                        "host.visual-canvas".to_owned(),
+                        "Visual Canvas".to_owned(),
                         "Studio",
                         None,
                     ),
@@ -5006,6 +5706,7 @@ impl VisualizerApp {
                         "host.neon-scope" => self.visual = 0,
                         "host.particle-forge" => self.visual = 1,
                         "host.performance-studio" => self.visual = 3,
+                        "host.visual-canvas" => self.visual = 4,
                         _ => {
                             if let Some(index) = preset_index {
                                 self.visual = 2;
@@ -5039,7 +5740,8 @@ impl VisualizerApp {
                     0 => "host.neon-scope",
                     1 => "host.particle-forge",
                     2 => active_id.as_deref().unwrap_or("host.missing-preset"),
-                    _ => "host.performance-studio",
+                    3 => "host.performance-studio",
+                    _ => "host.visual-canvas",
                 };
                 let profile = instrument_profile(mode_id);
                 let mode_name = match self.visual {
@@ -5052,7 +5754,8 @@ impl VisualizerApp {
                             || "No valid preset".to_owned(),
                             |preset| preset.name.clone(),
                         ),
-                    _ => "Living Photograph".to_owned(),
+                    3 => "Living Photograph".to_owned(),
+                    _ => "Visual Canvas".to_owned(),
                 };
                 let accent =
                     Color32::from_rgb(profile.accent[0], profile.accent[1], profile.accent[2]);
@@ -5113,6 +5816,12 @@ impl VisualizerApp {
                             {
                                 chosen_visual = Some(3);
                             }
+                            if ui
+                                .selectable_label(self.visual == 4, "Visual Canvas")
+                                .clicked()
+                            {
+                                chosen_visual = Some(4);
+                            }
                             ui.separator();
                             for (index, preset) in self.presets.iter().enumerate() {
                                 if ui
@@ -5168,6 +5877,8 @@ impl VisualizerApp {
 
                 if self.visual == 3 {
                     self.draw_studio_controls(ui);
+                } else if self.visual == 4 {
+                    self.draw_canvas_controls(ui);
                 } else {
                     egui::CollapsingHeader::new(format!(
                         "{} CONTROLS",
@@ -6121,6 +6832,8 @@ impl eframe::App for VisualizerApp {
         self.draw_visual(&ui.painter_at(rect), rect);
         if self.visual == 1 {
             self.draw_forge_handles(&ui.painter_at(rect), rect);
+        } else if self.visual == 4 {
+            self.draw_canvas_handles(&ui.painter_at(rect), rect);
         } else {
             self.draw_zone_handles(&ui.painter_at(rect), rect);
         }
@@ -6482,6 +7195,12 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
             gesture: "Canvas · right-click toggles the selected layer · right-drag changes scale and reactivity · drag frames the image",
             accent: [100, 220, 160],
         },
+        "host.visual-canvas" => InstrumentProfile {
+            family: "Draw Studio",
+            tagline: "Freehand strokes become selectable audio-reactive forms over any Visual Library source.",
+            gesture: "Canvas · draw with Brush/Pen/Shapes · select and drag forms · right-click opens form, visual, audio, and layer actions",
+            accent: [120, 255, 225],
+        },
         "thevisualizer.aurora-flow" => InstrumentProfile {
             family: "Aurora Ribbons",
             tagline: "Spectrum-fed polar ribbons shimmer above a deep reactive horizon.",
@@ -6780,9 +7499,10 @@ mod tests {
             "host.neon-scope".to_owned(),
             "host.particle-forge".to_owned(),
             "host.performance-studio".to_owned(),
+            "host.visual-canvas".to_owned(),
         ];
         ids.extend(bundled.presets.into_iter().map(|preset| preset.id));
-        assert_eq!(ids.len(), 38);
+        assert_eq!(ids.len(), 39);
 
         let mut taglines = std::collections::HashSet::new();
         for id in ids {
@@ -6927,6 +7647,7 @@ mod tests {
         assert_eq!(visual_index_for_key(eframe::egui::Key::Num2), Some(1));
         assert_eq!(visual_index_for_key(eframe::egui::Key::Num3), Some(2));
         assert_eq!(visual_index_for_key(eframe::egui::Key::Num4), Some(3));
+        assert_eq!(visual_index_for_key(eframe::egui::Key::Num5), Some(4));
     }
 
     #[test]

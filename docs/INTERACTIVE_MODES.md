@@ -65,6 +65,14 @@ The ten images in `Sample Images` are design references for ten independent GPU 
 | Halo Spectrum | circular spectrum with waveform and reflection | radius, bars, length, waveform, reflection, bloom |
 | Atomic Orbits | precessing elliptical trails and electrons | orbits, size, eccentricity, spin, electrons, trails |
 
+## Visual Canvas
+
+Visual Canvas is a draw-to-form host mode with an intentional mode-specific right-click menu. Brush and Pen strokes are simplified to at most 64 points: closed strokes become filled forms or ellipses, open strokes become ribbons, straight strokes become beams, and clicks become onset-driven particle emitters. Rectangle, Ellipse, Line, Select, and Eraser tools provide explicit alternatives.
+
+The canvas holds at most 32 ordered forms and 24 bounded undo snapshots. Each form owns visibility, locking, form type, visual content, Full/Bass/Mid/Treble/Onset routing, opacity, reactivity, stroke width, scale, rotation, and fill state. Visual content includes material, gradient, waveform, spectrum, particles, pulse, grid, halo, and orbit treatments. The background can be any discovered Visual Library preset, Neon Scope, Particle Forge, or the current Studio composition. Zone Studio remains available above the complete composition, and approved native plugins retain their existing bounded control targets.
+
+`V`, `B`, `P`, and `E` choose Select, Brush, Pen, and Eraser while this mode is active. `Ctrl+Z` and `Ctrl+Y` undo and redo, `Delete` removes the selected form, and right-click exposes contextual form, content, audio, layer, duplication, locking, and deletion actions.
+
 ## TheVisualCityScape
 
 The tenth flagship mode combines the physical **Neverending Party Block** with the impossible geometry and evolving sky of **Pocket Metropolis**. It starts with four pinned routes:
@@ -103,7 +111,7 @@ These are planned directions, not shipped modes:
 
 ## Saved scene format
 
-Each `.tvscene` file is a bounded, versioned UTF-8 snapshot. Format 5 records identity for the required host mode or preset plus exactly the state the host already owns: response, forty bounded parameter slots, five routed colors, palette/material values, camera state, and up to eight complete Zone Studio layers. Restoring a scene first selects its mode, rejects a missing preset, clamps values to the current preset metadata, and only then replaces the active interaction state. Formats 1–4 remain readable with safe zone defaults.
+Each `.tvscene` file is a bounded, versioned UTF-8 snapshot. Format 6 records identity for the required host mode or preset plus exactly the state the host already owns: response, forty bounded parameter slots, five routed colors, palette/material values, camera state, up to eight complete Zone Studio layers, and optional Visual Canvas state. Restoring a scene first selects its mode, rejects a missing preset, clamps values to the current preset metadata, and only then replaces the active interaction state. Formats 1–5 remain readable with safe defaults.
 
 The player discovers scenes from `%LOCALAPPDATA%\TheVisualizer\scenes`; `THEVISUALIZER_SCENES` overrides that folder for focused testing. Invalid, oversized, duplicate-key, non-finite, or out-of-range files are rejected and reported without interrupting visualization. Scene files contain no shader code, native library, audio, API credential, or generated image asset.
 
