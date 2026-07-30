@@ -54,16 +54,19 @@ if ($LASTEXITCODE -ne 0) {
 
 $presetPath = Join-Path $stagePath "presets"
 $assetPath = Join-Path $stagePath "assets"
+$eventHorizonAssetPath = Join-Path $assetPath "event-horizon"
 $pluginPath = Join-Path $stagePath "plugins"
 $sdkPath = Join-Path $stagePath "plugin-sdk"
 $docsPath = Join-Path $stagePath "docs"
-New-Item -ItemType Directory -Path $presetPath, $assetPath, $pluginPath, (Join-Path $sdkPath "include"), $docsPath -Force | Out-Null
+New-Item -ItemType Directory -Path $presetPath, $assetPath, $eventHorizonAssetPath, $pluginPath, (Join-Path $sdkPath "include"), $docsPath -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repoRoot "target\$configurationName\thevisualizer.exe") -Destination $stagePath
 Copy-Item -Path (Join-Path $repoRoot "presets\*.tvpreset") -Destination $presetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse.png") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\living-photograph-greenhouse-motion.webp") -Destination $assetPath
 Copy-Item -LiteralPath (Join-Path $repoRoot "assets\README.md") -Destination $assetPath
+Copy-Item -Path (Join-Path $repoRoot "assets\event-horizon\*-motion.webp") -Destination $eventHorizonAssetPath
+Copy-Item -LiteralPath (Join-Path $repoRoot "assets\event-horizon\README.md") -Destination $eventHorizonAssetPath
 foreach ($library in @(
     "thevisualizer_example_plugin.dll",
     "thevisualizer_creative_suite_plugin.dll"
@@ -141,6 +144,12 @@ $required += Get-ChildItem -LiteralPath (Join-Path $repoRoot "plugins") -Filter 
     ForEach-Object { "plugins\$($_.Name)" }
 $required += Get-ChildItem -LiteralPath (Join-Path $repoRoot "presets") -Filter "*.tvpreset" -File |
     ForEach-Object { "presets\$($_.Name)" }
+$required += @(
+    "assets\event-horizon\README.md"
+    "assets\event-horizon\event-horizon-orbit-motion.webp"
+    "assets\event-horizon\event-horizon-events-motion.webp"
+    "assets\event-horizon\event-horizon-crossing-motion.webp"
+)
 foreach ($relativePath in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $stagePath $relativePath) -PathType Leaf)) {
         throw "Package is missing $relativePath."

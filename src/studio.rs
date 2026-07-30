@@ -16,6 +16,90 @@ const MAX_MOTION_FRAMES: usize = 64;
 const MAX_MOTION_ALLOC_BYTES: usize = 192 * 1024 * 1024;
 const MOTION_FPS: f32 = 24.0;
 
+pub(crate) fn load_bounded_texture(
+    context: &egui::Context,
+    path: &Path,
+    label: &str,
+) -> Result<(TextureHandle, [usize; 2]), String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Could not inspect image {}: {error}", path.display()))?;
+    if metadata.len() > MAX_IMAGE_FILE_BYTES {
+        return Err(format!(
+            "Image exceeds the {} MiB file limit",
+            MAX_IMAGE_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    let mut reader = ImageReader::open(path)
+        .map_err(|error| format!("Could not open image {}: {error}", path.display()))?
+        .with_guessed_format()
+        .map_err(|error| format!("Could not identify image {}: {error}", path.display()))?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_EDGE);
+    limits.max_image_height = Some(MAX_IMAGE_EDGE);
+    limits.max_alloc = Some(MAX_IMAGE_ALLOC_BYTES);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .map_err(|error| format!("Could not decode image {}: {error}", path.display()))?;
+    let size = [decoded.width() as usize, decoded.height() as usize];
+    let rgba = decoded.to_rgba8();
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    Ok((
+        context.load_texture(
+            format!("{label}:{}", path.display()),
+            image,
+            TextureOptions::LINEAR,
+        ),
+        size,
+    ))
+}
+
+pub(crate) fn load_motion_frames(path: &Path) -> Result<Vec<egui::ColorImage>, String> {
+    let decoder =
+        WebPDecoder::new(BufReader::new(File::open(path).map_err(|error| {
+            format!("Could not open motion {}: {error}", path.display())
+        })?))
+        .map_err(|error| format!("Could not decode motion {}: {error}", path.display()))?;
+    if !decoder.has_animation() {
+        return Err(format!("Motion asset is not animated: {}", path.display()));
+    }
+
+    let mut frames = Vec::new();
+    let mut decoded_bytes = 0usize;
+    let mut motion_size = None;
+    for frame in decoder.into_frames() {
+        if frames.len() == MAX_MOTION_FRAMES {
+            return Err(format!("Motion asset exceeds {MAX_MOTION_FRAMES} frames"));
+        }
+        let rgba = frame
+            .map_err(|error| format!("Could not decode motion frame: {error}"))?
+            .into_buffer();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        if size[0] > MAX_IMAGE_EDGE as usize || size[1] > MAX_IMAGE_EDGE as usize {
+            return Err("Motion frame exceeds the image dimension limit".to_owned());
+        }
+        if motion_size.is_some_and(|expected| expected != size) {
+            return Err(format!(
+                "Motion frames do not share one resolution (found {}x{})",
+                size[0], size[1]
+            ));
+        }
+        motion_size = Some(size);
+        decoded_bytes = decoded_bytes.saturating_add(rgba.as_raw().len());
+        if decoded_bytes > MAX_MOTION_ALLOC_BYTES {
+            return Err("Motion asset exceeds the 192 MiB decoded limit".to_owned());
+        }
+        frames.push(egui::ColorImage::from_rgba_unmultiplied(
+            size,
+            rgba.as_raw(),
+        ));
+    }
+    if frames.len() < 2 {
+        return Err("Motion asset needs at least two frames".to_owned());
+    }
+    Ok(frames)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StudioLayerKind {
     Image,
@@ -151,6 +235,7 @@ pub struct StudioImage {
     pub texture: TextureHandle,
     pub motion: Option<StudioMotion>,
     pub rigged: bool,
+    pub generated: bool,
 }
 
 pub struct StudioMotion {
@@ -245,46 +330,33 @@ impl StudioState {
         if existing.is_none() && self.media_bin.len() == MAX_MEDIA_BIN {
             return Err(format!("Media bin is limited to {MAX_MEDIA_BIN} items"));
         }
-        let metadata = fs::metadata(path)
-            .map_err(|error| format!("Could not inspect image {}: {error}", path.display()))?;
-        if metadata.len() > MAX_IMAGE_FILE_BYTES {
-            return Err(format!(
-                "Image exceeds the {} MiB file limit",
-                MAX_IMAGE_FILE_BYTES / 1024 / 1024
-            ));
-        }
-        let mut reader = ImageReader::open(path)
-            .map_err(|error| format!("Could not open image {}: {error}", path.display()))?
-            .with_guessed_format()
-            .map_err(|error| format!("Could not identify image {}: {error}", path.display()))?;
-        let mut limits = Limits::default();
-        limits.max_image_width = Some(MAX_IMAGE_EDGE);
-        limits.max_image_height = Some(MAX_IMAGE_EDGE);
-        limits.max_alloc = Some(MAX_IMAGE_ALLOC_BYTES);
-        reader.limits(limits);
-        let decoded = reader
-            .decode()
-            .map_err(|error| format!("Could not decode image {}: {error}", path.display()))?;
-        let size = [decoded.width() as usize, decoded.height() as usize];
-        let rgba = decoded.to_rgba8();
-        let image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-        let texture = context.load_texture(
-            format!("studio:{}", path.display()),
-            image,
-            TextureOptions::LINEAR,
-        );
+        let (texture, size) = load_bounded_texture(context, path, "studio")?;
         self.image = Some(StudioImage {
             path: path.to_owned(),
             size,
             texture,
             motion: None,
             rigged: false,
+            generated: false,
         });
         self.selected_media = existing.unwrap_or_else(|| {
             self.media_bin.push(path.to_owned());
             self.media_bin.len() - 1
         });
         self.notice = Some(format!("Loaded image · {}", path.display()));
+        Ok(())
+    }
+
+    pub fn load_generated_image(
+        &mut self,
+        context: &egui::Context,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.load_image(context, path)?;
+        if let Some(image) = &mut self.image {
+            image.generated = true;
+        }
+        self.notice = Some(format!("AI scene applied · {}", path.display()));
         Ok(())
     }
 
@@ -319,48 +391,7 @@ impl StudioState {
             .image
             .as_mut()
             .ok_or_else(|| "Load the base image before its motion clip.".to_owned())?;
-        let decoder =
-            WebPDecoder::new(BufReader::new(File::open(path).map_err(|error| {
-                format!("Could not open motion {}: {error}", path.display())
-            })?))
-            .map_err(|error| format!("Could not decode motion {}: {error}", path.display()))?;
-        if !decoder.has_animation() {
-            return Err(format!("Motion asset is not animated: {}", path.display()));
-        }
-
-        let mut frames = Vec::new();
-        let mut decoded_bytes = 0usize;
-        let mut motion_size = None;
-        for frame in decoder.into_frames() {
-            if frames.len() == MAX_MOTION_FRAMES {
-                return Err(format!("Motion asset exceeds {MAX_MOTION_FRAMES} frames"));
-            }
-            let rgba = frame
-                .map_err(|error| format!("Could not decode motion frame: {error}"))?
-                .into_buffer();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            if size[0] > MAX_IMAGE_EDGE as usize || size[1] > MAX_IMAGE_EDGE as usize {
-                return Err("Motion frame exceeds the image dimension limit".to_owned());
-            }
-            if motion_size.is_some_and(|expected| expected != size) {
-                return Err(format!(
-                    "Motion frames do not share one resolution (found {}x{})",
-                    size[0], size[1]
-                ));
-            }
-            motion_size = Some(size);
-            decoded_bytes = decoded_bytes.saturating_add(rgba.as_raw().len());
-            if decoded_bytes > MAX_MOTION_ALLOC_BYTES {
-                return Err("Motion asset exceeds the 192 MiB decoded limit".to_owned());
-            }
-            frames.push(egui::ColorImage::from_rgba_unmultiplied(
-                size,
-                rgba.as_raw(),
-            ));
-        }
-        if frames.len() < 2 {
-            return Err("Motion asset needs at least two frames".to_owned());
-        }
+        let frames = load_motion_frames(path)?;
         let texture = context.load_texture(
             format!("studio-motion:{}", path.display()),
             frames[0].clone(),

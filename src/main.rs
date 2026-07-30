@@ -1,7 +1,9 @@
+mod ai_studio;
 mod analysis;
 mod audio;
 mod canvas;
 mod control;
+mod event_horizon;
 mod forge_model;
 mod particle_forge;
 mod performance;
@@ -19,6 +21,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ai_studio::{
+    AiStatus, AutoScenePolicy, GenerationAspect, GenerationQuality, GenerationRequest,
+    GenerationResult, LocalAiSession, generated_directory, write_metadata,
+};
 use analysis::{Analyzer, FFT_SIZE, Features};
 use audio::{AudioCapture, AudioDevice, SampleBuffer, SharedSamples, SourceKind};
 use canvas::{
@@ -28,6 +34,7 @@ use canvas::{
 use control::{ControlEvent, ControlHub};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
+use event_horizon::{EVENT_HORIZON_ID, EventHorizonVisual};
 use forge_model::ForgeModel;
 use particle_forge::{
     ForgeForceKind, ForgeFrame, ForgeQuality, ForgeSceneSource, ForgeTopology,
@@ -43,6 +50,7 @@ use render::{
 use scene::{SavedScene, SceneSnapshot, SceneZone};
 use studio::{
     MAX_STUDIO_LAYERS, StudioBand, StudioBlend, StudioLayer, StudioLayerKind, StudioState,
+    load_bounded_texture,
 };
 use thevisualizer_plugin_sdk::{
     EVENT_BEAT, EVENT_TAKE_A, EVENT_TAKE_B, OP_ADD, OP_MULTIPLY, PluginCommandV2, TARGET_CAMERA,
@@ -723,6 +731,54 @@ impl FrameLimit {
     }
 }
 
+struct AiStudioUi {
+    session: LocalAiSession,
+    prompt: String,
+    negative_prompt: String,
+    pack_path: String,
+    use_live_audio: bool,
+    auto_scene: AutoScenePolicy,
+    aspect: GenerationAspect,
+    quality: GenerationQuality,
+    lora_strength: f32,
+    seed_locked: bool,
+    seed: u64,
+    request_id: u64,
+    latest: Option<GenerationResult>,
+    latest_request: Option<GenerationRequest>,
+    preview: Option<egui::TextureHandle>,
+    notice: Option<String>,
+}
+
+impl Default for AiStudioUi {
+    fn default() -> Self {
+        let session = LocalAiSession::default();
+        let pack_path = session
+            .pack_root
+            .as_ref()
+            .map_or_else(String::new, |path| path.display().to_string());
+        Self {
+            session,
+            prompt: String::new(),
+            negative_prompt: "text, watermark, logo, low detail, malformed anatomy, oversaturated"
+                .to_owned(),
+            pack_path,
+            use_live_audio: true,
+            auto_scene: AutoScenePolicy::default(),
+            aspect: GenerationAspect::Landscape,
+            quality: GenerationQuality::Preview,
+            lora_strength: 0.65,
+            seed_locked: false,
+            seed: 0,
+            request_id: 0,
+            latest: None,
+            latest_request: None,
+            preview: None,
+            notice: None,
+        }
+    }
+}
+
 #[cfg(test)]
 fn pacing_delay(limit: FrameLimit, elapsed: Duration) -> Option<Duration> {
     limit.interval()?.checked_sub(elapsed)
@@ -843,6 +899,7 @@ struct VisualizerApp {
     features: Features,
     visual_history: VisualHistory,
     studio: StudioState,
+    event_horizon: EventHorizonVisual,
     canvas: CanvasState,
     interaction: InteractionState,
     colors: ColorSystem,
@@ -863,6 +920,8 @@ struct VisualizerApp {
     forge_panel: bool,
     performance_panel: bool,
     visual_director_panel: bool,
+    ai_studio_panel: bool,
+    ai_studio: AiStudioUi,
     presentation: PresentationMode,
     frame_limit: FrameLimit,
     last_paced_frame: Instant,
@@ -1018,6 +1077,7 @@ impl VisualizerApp {
             features: Features::default(),
             visual_history: VisualHistory::default(),
             studio,
+            event_horizon: EventHorizonVisual::default(),
             canvas: CanvasState::default(),
             interaction: InteractionState::default(),
             colors: ColorSystem::default(),
@@ -1038,6 +1098,8 @@ impl VisualizerApp {
             forge_panel: false,
             performance_panel: false,
             visual_director_panel: false,
+            ai_studio_panel: false,
+            ai_studio: AiStudioUi::default(),
             presentation: PresentationMode::Windowed,
             frame_limit: FrameLimit::Display,
             last_paced_frame: started,
@@ -1821,7 +1883,11 @@ impl VisualizerApp {
     }
 
     fn pace_frame(&mut self) {
-        let interval = if self.visual == 1 {
+        let interval = if self.ai_studio.session.status.generating() {
+            Some(Duration::from_secs_f64(1.0 / 30.0))
+        } else if self.ai_studio.session.status.loaded() {
+            Some(Duration::from_secs_f64(1.0 / 60.0))
+        } else if self.visual == 1 {
             self.particle_forge
                 .quality
                 .frame_rate()
@@ -1914,6 +1980,7 @@ impl VisualizerApp {
             mode_panel,
             forge,
             performance,
+            ai_studio,
         ) = ctx.input(|input| {
             (
                 input.key_pressed(egui::Key::Tab),
@@ -1935,6 +2002,7 @@ impl VisualizerApp {
                 input.key_pressed(egui::Key::O),
                 input.key_pressed(egui::Key::F),
                 input.key_pressed(egui::Key::P),
+                input.key_pressed(egui::Key::A),
             )
         });
         let direct_visual = ctx.input(|input| {
@@ -2012,6 +2080,9 @@ impl VisualizerApp {
         if performance && self.visual != 4 {
             self.performance_panel = !self.performance_panel;
         }
+        if ai_studio {
+            self.ai_studio_panel = !self.ai_studio_panel;
+        }
         if borderless && self.visual != 4 {
             self.set_presentation(ctx, self.presentation.toggle_borderless());
         }
@@ -2041,7 +2112,9 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.visual_library_panel {
+            if self.ai_studio_panel {
+                self.ai_studio_panel = false;
+            } else if self.visual_library_panel {
                 self.visual_library_panel = false;
             } else if self.performance_panel {
                 self.performance_panel = false;
@@ -2473,6 +2546,7 @@ impl VisualizerApp {
         self.overlay = true;
         self.show_text = true;
         self.particle_forge.reset();
+        self.event_horizon.reset_journey();
         self.performance.reset();
         let default_decks = self
             .presets
@@ -3181,6 +3255,11 @@ impl VisualizerApp {
             self.draw_tunnel(painter, rect);
             return;
         };
+        let event_horizon = renderer.active_id() == EVENT_HORIZON_ID;
+        if event_horizon {
+            self.event_horizon
+                .draw(painter, rect, &self.mode_parameters);
+        }
         let scene = self.preset_scene_state();
         let mut parameters = self.mode_parameters;
         let response_index = self
@@ -3196,6 +3275,9 @@ impl VisualizerApp {
             .unwrap_or(0);
         let response = self.gain * self.plugin_multiplier * drive;
         parameters[response_index] = response;
+        if event_horizon {
+            self.event_horizon.apply_live_controls(&mut parameters);
+        }
         renderer.paint_with_opacity(
             painter,
             rect,
@@ -3216,7 +3298,12 @@ impl VisualizerApp {
                 scene: &scene,
                 parameters: &parameters,
             },
-            opacity,
+            if event_horizon {
+                self.event_horizon
+                    .shader_opacity(opacity, &self.mode_parameters)
+            } else {
+                opacity
+            },
         );
         if self.show_text && renderer.active_id() == "thevisualizer.cascading-falls" {
             self.draw_waterfall_labels(painter, rect);
@@ -3318,15 +3405,16 @@ impl VisualizerApp {
         let source_aspect = image.size[0] as f32 / image.size[1].max(1) as f32;
         let target_aspect = rect.width() / rect.height().max(1.0);
         let has_motion = image.motion.is_some();
-        let zoom = (self.interaction.camera_zoom
-            * layer.scale
-            * (1.0
-                + if has_motion {
-                    0.0
-                } else {
-                    energy * layer.reactivity * 0.055
-                }))
-        .clamp(0.4, 4.0);
+        let reactive_zoom = if image.generated {
+            self.features.low * layer.reactivity * 0.025
+                + self.features.onset * layer.reactivity * 0.008
+        } else if has_motion {
+            0.0
+        } else {
+            energy * layer.reactivity * 0.055
+        };
+        let zoom =
+            (self.interaction.camera_zoom * layer.scale * (1.0 + reactive_zoom)).clamp(0.4, 4.0);
         let (mut uv_width, mut uv_height) = if source_aspect > target_aspect {
             (target_aspect / source_aspect, 1.0)
         } else {
@@ -3334,8 +3422,15 @@ impl VisualizerApp {
         };
         uv_width = (uv_width / zoom).clamp(0.05, 1.0);
         uv_height = (uv_height / zoom).clamp(0.05, 1.0);
+        let ai_parallax = if image.generated {
+            self.features.mid * layer.reactivity * 0.015
+        } else {
+            0.0
+        };
         let center = Pos2::new(
-            0.5 + self.interaction.camera_yaw.sin() * 0.08 + layer.position[0] * 0.25,
+            0.5 + self.interaction.camera_yaw.sin() * 0.08
+                + layer.position[0] * 0.25
+                + ai_parallax * self.started.elapsed().as_secs_f32().sin(),
             0.5 + self.interaction.camera_pitch * 0.08 + layer.position[1] * 0.25,
         );
         let uv = Rect::from_center_size(
@@ -3379,6 +3474,31 @@ impl VisualizerApp {
                     layer.opacity * motion.mix,
                 );
             }
+            return;
+        }
+        if image.generated {
+            let display_uv = Rect {
+                min: Pos2::new(
+                    if layer.mirror_x { uv.max.x } else { uv.min.x },
+                    if layer.mirror_y { uv.max.y } else { uv.min.y },
+                ),
+                max: Pos2::new(
+                    if layer.mirror_x { uv.min.x } else { uv.max.x },
+                    if layer.mirror_y { uv.min.y } else { uv.max.y },
+                ),
+            };
+            let shimmer = (self.features.high * layer.reactivity * 0.06).clamp(0.0, 0.12);
+            painter.image(
+                image.texture.id(),
+                rect,
+                display_uv,
+                Color32::from_rgba_unmultiplied(
+                    255,
+                    (255.0 * (1.0 - shimmer * 0.35)) as u8,
+                    255,
+                    (255.0 * layer.opacity.clamp(0.0, 1.0)) as u8,
+                ),
+            );
             return;
         }
         let time = self.started.elapsed().as_secs_f32();
@@ -3874,6 +3994,361 @@ impl VisualizerApp {
         }
     }
 
+    fn compose_ai_prompt(&mut self) {
+        let routed_colors = format!(
+            "full {}, bass {}, mids {}, treble {}, background {}",
+            color_hex(self.colors.full),
+            color_hex(self.colors.bass),
+            color_hex(self.colors.mid),
+            color_hex(self.colors.treble),
+            color_hex(self.colors.background),
+        );
+        self.visual_director.compose(
+            VISUAL_NAMES[self.visual],
+            &self.features,
+            self.colors.palette.label(),
+            self.colors.finish.label(),
+            &routed_colors,
+        );
+        if let Some(brief) = &self.visual_director.brief {
+            self.ai_studio.prompt = format!(
+                "tvizfield, {} Audio passage: {}; active geometry: {}.",
+                brief.prompt, brief.visual_dna.passage, VISUAL_NAMES[self.visual]
+            );
+            if !self.ai_studio.seed_locked {
+                self.ai_studio.seed = brief.novelty_id;
+            }
+        }
+    }
+
+    fn generate_ai_scene(&mut self) {
+        if self.ai_studio.prompt.trim().is_empty() && self.ai_studio.use_live_audio {
+            self.compose_ai_prompt();
+        }
+        let directory = match generated_directory() {
+            Ok(directory) => directory,
+            Err(error) => {
+                self.ai_studio.notice = Some(error);
+                return;
+            }
+        };
+        self.ai_studio.request_id = self.ai_studio.request_id.wrapping_add(1);
+        let id = self.ai_studio.request_id;
+        let seed = if self.ai_studio.seed_locked {
+            self.ai_studio.seed
+        } else {
+            self.visual_director
+                .brief
+                .as_ref()
+                .map_or(id, |brief| brief.novelty_id)
+        };
+        let [width, height] = self.ai_studio.aspect.dimensions(self.ai_studio.quality);
+        let request = GenerationRequest {
+            id,
+            prompt: self.ai_studio.prompt.trim().to_owned(),
+            negative_prompt: self.ai_studio.negative_prompt.trim().to_owned(),
+            width,
+            height,
+            steps: self.ai_studio.quality.steps(),
+            cfg_scale: 2.0,
+            seed,
+            lora_strength: self.ai_studio.lora_strength,
+            output_path: directory.join(format!("tviz-{id:016x}.png")),
+        };
+        match self.ai_studio.session.generate(request.clone()) {
+            Ok(()) => {
+                self.ai_studio.latest_request = Some(request);
+                self.ai_studio.notice = None;
+            }
+            Err(error) => self.ai_studio.notice = Some(error),
+        }
+    }
+
+    fn poll_ai_studio(&mut self, ctx: &egui::Context) {
+        for result in self.ai_studio.session.poll() {
+            if let Some(request) = &self.ai_studio.latest_request {
+                let _ = write_metadata(&result, request);
+            }
+            match load_bounded_texture(ctx, &result.path, "ai-studio-preview") {
+                Ok((texture, _)) => {
+                    self.ai_studio.preview = Some(texture);
+                    self.ai_studio.latest = Some(result);
+                    self.ai_studio.notice = None;
+                }
+                Err(error) => self.ai_studio.notice = Some(error),
+            }
+        }
+        let energy = (self.features.rms * 3.0).clamp(0.0, 1.0);
+        let passage = if self.features.onset > 0.75 && energy > 0.55 {
+            "impact"
+        } else if energy > 0.7 {
+            "peak"
+        } else if energy < 0.2 {
+            "quiet"
+        } else {
+            "flow"
+        };
+        if self
+            .ai_studio
+            .auto_scene
+            .observe(self.visual == 3, passage, energy, Instant::now())
+            && !self.ai_studio.session.status.generating()
+        {
+            self.compose_ai_prompt();
+            self.generate_ai_scene();
+        }
+    }
+
+    fn draw_ai_studio_panel(&mut self, ctx: &egui::Context) {
+        let mut open = self.ai_studio_panel;
+        egui::Window::new("AI STUDIO [A]")
+            .open(&mut open)
+            .default_width(620.0)
+            .default_height(680.0)
+            .show(ctx, |ui| {
+                let status = self.ai_studio.session.status.label();
+                ui.horizontal(|ui| {
+                    ui.heading("AI STUDIO");
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(status)
+                            .strong()
+                            .color(Color32::from_rgb(80, 245, 220)),
+                    );
+                });
+
+                if matches!(self.ai_studio.session.status, AiStatus::Missing) {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("LOCAL AI PACK REQUIRED")
+                                .strong()
+                                .color(Color32::from_rgb(255, 175, 90)),
+                        );
+                        ui.label(
+                            "Generation runs entirely on this PC. No API key, cloud inference, \
+                             server, or open network port is used.",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.text_edit_singleline(&mut self.ai_studio.pack_path);
+                            if ui.button("Locate AI Pack").clicked() {
+                                let path = PathBuf::from(self.ai_studio.pack_path.trim());
+                                if path.join("manifest.json").is_file() {
+                                    self.ai_studio.session.locate(path);
+                                } else {
+                                    self.ai_studio.notice = Some(
+                                        "Choose a folder containing manifest.json.".to_owned(),
+                                    );
+                                }
+                            }
+                        });
+                        if ui.button("Open installation instructions").clicked() {
+                            self.ai_studio.notice = Some(
+                                "See docs/AI_PACK.md. The pack may also be selected with \
+                                 THEVISUALIZER_AI_PACK."
+                                    .to_owned(),
+                            );
+                        }
+                    });
+                }
+
+                if self.ai_studio.prompt.trim().is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Create from live audio").clicked() {
+                            self.compose_ai_prompt();
+                        }
+                        if ui.button("Describe a scene").clicked() {
+                            ui.memory_mut(|memory| {
+                                memory.request_focus(egui::Id::new("ai-scene-prompt"))
+                            });
+                        }
+                        if ui
+                            .add_enabled(
+                                self.studio.image.is_some(),
+                                egui::Button::new("Reimagine current Studio image"),
+                            )
+                            .clicked()
+                        {
+                            let source = self
+                                .studio
+                                .image
+                                .as_ref()
+                                .and_then(|image| image.path.file_stem())
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("current Studio scene");
+                            self.ai_studio.prompt = format!(
+                                "tvizfield, reimagine {source} as a detailed music-reactive visual \
+                                 environment, preserve its composition and realism"
+                            );
+                        }
+                    });
+                }
+
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.ai_studio.prompt)
+                        .id(egui::Id::new("ai-scene-prompt"))
+                        .hint_text("Scene description / Visual DNA prompt")
+                        .desired_rows(4),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.ai_studio.session.status.generating(),
+                            egui::Button::new("Generate Scene"),
+                        )
+                        .clicked()
+                    {
+                        self.generate_ai_scene();
+                    }
+                    ui.checkbox(&mut self.ai_studio.use_live_audio, "Use Live Audio");
+                    ui.checkbox(&mut self.ai_studio.auto_scene.enabled, "Auto Scene");
+                    if ui
+                        .add_enabled(
+                            self.ai_studio.session.status.generating(),
+                            egui::Button::new("Cancel"),
+                        )
+                        .clicked()
+                    {
+                        self.ai_studio.session.cancel();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Style: TheVisualizer Hybrid");
+                    egui::ComboBox::from_id_salt("ai-aspect")
+                        .selected_text(self.ai_studio.aspect.label())
+                        .show_ui(ui, |ui| {
+                            for aspect in GenerationAspect::ALL {
+                                ui.selectable_value(
+                                    &mut self.ai_studio.aspect,
+                                    aspect,
+                                    aspect.label(),
+                                );
+                            }
+                        });
+                    ui.label(if self.ai_studio.seed_locked {
+                        format!("Seed: {}", self.ai_studio.seed)
+                    } else {
+                        "Seed: Auto".to_owned()
+                    });
+                });
+                ui.separator();
+
+                if let Some(texture) = &self.ai_studio.preview {
+                    ui.add(egui::Image::new(texture).max_width(580.0).max_height(360.0));
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Use in Studio").clicked()
+                            && let Some(result) = &self.ai_studio.latest
+                        {
+                            match self.studio.load_generated_image(ctx, &result.path) {
+                                Ok(()) => self.visual = 3,
+                                Err(error) => self.ai_studio.notice = Some(error),
+                            }
+                        }
+                        if ui.button("Regenerate").clicked() {
+                            self.generate_ai_scene();
+                        }
+                        if ui.button("Save").clicked()
+                            && let Some(result) = &self.ai_studio.latest
+                        {
+                            self.ai_studio.notice =
+                                Some(format!("Saved locally · {}", result.path.display()));
+                        }
+                        if ui.button("Open Folder").clicked() {
+                            match generated_directory() {
+                                Ok(path) => {
+                                    let _ = std::process::Command::new("explorer.exe")
+                                        .arg(path)
+                                        .spawn();
+                                }
+                                Err(error) => self.ai_studio.notice = Some(error),
+                            }
+                        }
+                    });
+                }
+
+                egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                matches!(
+                                    self.ai_studio.session.status,
+                                    AiStatus::Ready | AiStatus::Error(_)
+                                ),
+                                egui::Button::new("Load Model"),
+                            )
+                            .clicked()
+                        {
+                            self.ai_studio.session.load();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.ai_studio.session.status.loaded(),
+                                egui::Button::new("Unload AI"),
+                            )
+                            .clicked()
+                        {
+                            self.ai_studio.session.unload();
+                        }
+                        ui.selectable_value(
+                            &mut self.ai_studio.quality,
+                            GenerationQuality::Preview,
+                            "Preview · 4 steps",
+                        );
+                        ui.selectable_value(
+                            &mut self.ai_studio.quality,
+                            GenerationQuality::Final,
+                            "Final · 8 steps",
+                        );
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut self.ai_studio.lora_strength, 0.0..=1.0)
+                            .text("tvizfield LoRA"),
+                    );
+                    ui.checkbox(&mut self.ai_studio.seed_locked, "Lock seed");
+                    if self.ai_studio.seed_locked {
+                        ui.add(egui::DragValue::new(&mut self.ai_studio.seed));
+                    }
+                    ui.label("Negative prompt");
+                    ui.text_edit_multiline(&mut self.ai_studio.negative_prompt);
+                    ui.label(format!(
+                        "Runner {} · model {} · timeout {}s",
+                        ai_studio::RUNNER_COMMIT,
+                        ai_studio::MODEL_ID,
+                        self.ai_studio.quality.timeout().as_secs()
+                    ));
+                    if let AiStatus::Error(error) = &self.ai_studio.session.status {
+                        ui.colored_label(Color32::from_rgb(255, 120, 120), error);
+                    }
+                });
+
+                if !self.ai_studio.session.history.is_empty() {
+                    ui.separator();
+                    ui.label("LATEST GENERATIONS");
+                    ui.horizontal_wrapped(|ui| {
+                        for result in self.ai_studio.session.history.iter().take(8) {
+                            if ui
+                                .small_button(format!("{:04x}", result.request_id))
+                                .on_hover_text(result.path.display().to_string())
+                                .clicked()
+                            {
+                                match load_bounded_texture(ctx, &result.path, "ai-history") {
+                                    Ok((texture, _)) => {
+                                        self.ai_studio.preview = Some(texture);
+                                        self.ai_studio.latest = Some(result.clone());
+                                    }
+                                    Err(error) => self.ai_studio.notice = Some(error),
+                                }
+                            }
+                        }
+                    });
+                }
+                if let Some(notice) = &self.ai_studio.notice {
+                    ui.separator();
+                    ui.label(notice);
+                }
+            });
+        self.ai_studio_panel = open;
+    }
+
     fn draw_overlay(&mut self, ctx: &egui::Context) {
         let (status, status_color) = self.status();
         egui::Area::new(egui::Id::new("player-overlay"))
@@ -3888,7 +4363,7 @@ impl VisualizerApp {
                     .corner_radius(12)
                     .inner_margin(14)
                     .show(ui, |ui| {
-                        ui.set_width(430.0);
+                        ui.set_width(560.0);
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("THE VISUALIZER")
@@ -4001,6 +4476,21 @@ impl VisualizerApp {
                                 egui::RichText::new(error)
                                     .small()
                                     .color(Color32::from_rgb(255, 190, 90)),
+                            );
+                        }
+                        if self.visual == 2
+                            && self
+                                .gpu_preset
+                                .as_ref()
+                                .is_some_and(|renderer| renderer.active_id() == EVENT_HORIZON_ID)
+                            && let Some(error) = &self.event_horizon.error
+                        {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Photographic space layers unavailable: {error}"
+                                ))
+                                .small()
+                                .color(Color32::from_rgb(255, 190, 90)),
                             );
                         }
                         if let Some(error) = self.stream_error() {
@@ -4131,6 +4621,28 @@ impl VisualizerApp {
                             {
                                 self.visual_library_panel = !self.visual_library_panel;
                             }
+                            if ui
+                                .selectable_label(self.ai_studio_panel, "AI Studio [A]")
+                                .on_hover_text("Create offline AI scenes and apply them to Studio.")
+                                .clicked()
+                            {
+                                self.ai_studio_panel = !self.ai_studio_panel;
+                            }
+                            let ai_color = match &self.ai_studio.session.status {
+                                AiStatus::Missing | AiStatus::Error(_) => {
+                                    Color32::from_rgb(255, 165, 90)
+                                }
+                                AiStatus::Generating(_) | AiStatus::SceneReady => {
+                                    Color32::from_rgb(190, 105, 255)
+                                }
+                                _ => Color32::from_rgb(70, 245, 220),
+                            };
+                            ui.label(
+                                egui::RichText::new(self.ai_studio.session.status.label())
+                                    .small()
+                                    .strong()
+                                    .color(ai_color),
+                            );
                         });
                         let details_label = if !self.plugins.is_empty() {
                             "DETAILS & EXTENSIONS"
@@ -4318,6 +4830,33 @@ impl VisualizerApp {
 
     fn draw_studio_controls(&mut self, ui: &mut egui::Ui) {
         ui.separator();
+        if ui
+            .button(
+                egui::RichText::new("Generate with AI [A]")
+                    .strong()
+                    .color(Color32::from_rgb(180, 110, 255)),
+            )
+            .clicked()
+        {
+            self.ai_studio_panel = true;
+        }
+        if !self.ai_studio.session.history.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Recent");
+                for result in self.ai_studio.session.history.iter().take(8) {
+                    if ui
+                        .small_button(format!("{:04x}", result.request_id))
+                        .on_hover_text(result.path.display().to_string())
+                        .clicked()
+                    {
+                        match self.studio.load_generated_image(ui.ctx(), &result.path) {
+                            Ok(()) => self.visual = 3,
+                            Err(error) => self.ai_studio.notice = Some(error),
+                        }
+                    }
+                }
+            });
+        }
         ui.label(
             egui::RichText::new(format!(
                 "STUDIO LAYERS · {}/{}",
@@ -6772,6 +7311,27 @@ impl eframe::App for VisualizerApp {
             }
         }
         self.update_features();
+        if self.visual == 2
+            && self
+                .gpu_preset
+                .as_ref()
+                .is_some_and(|renderer| renderer.active_id() == EVENT_HORIZON_ID)
+        {
+            self.event_horizon.ensure_loaded(ctx, &asset_directory());
+            self.event_horizon.update(
+                ctx,
+                (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1),
+                [
+                    self.features.low,
+                    self.features.mid,
+                    self.features.high,
+                    self.features.rms,
+                    self.features.onset,
+                    self.features.transient,
+                ],
+                &self.mode_parameters,
+            );
+        }
         let macro_values = self.performance.update_macros(
             [
                 self.features.rms,
@@ -6806,7 +7366,11 @@ impl eframe::App for VisualizerApp {
             ],
         );
         self.update_plugin();
-        let repaint = if self.visual == 1 {
+        let repaint = if self.ai_studio.session.status.generating() {
+            Duration::from_secs_f64(1.0 / 30.0)
+        } else if self.ai_studio.session.status.loaded() {
+            Duration::from_secs_f64(1.0 / 60.0)
+        } else if self.visual == 1 {
             self.particle_forge
                 .quality
                 .frame_rate()
@@ -6822,6 +7386,7 @@ impl eframe::App for VisualizerApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_ai_studio(ui.ctx());
         let rect = ui.max_rect();
         let response = ui.interact(
             rect,
@@ -6861,6 +7426,9 @@ impl eframe::App for VisualizerApp {
         }
         if self.performance_panel {
             self.draw_performance_panel(ui.ctx());
+        }
+        if self.ai_studio_panel {
+            self.draw_ai_studio_panel(ui.ctx());
         }
         if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
             ui.painter().rect_filled(
@@ -7238,9 +7806,9 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
             accent: [190, 70, 255],
         },
         "thevisualizer.fractal-reef" => InstrumentProfile {
-            family: "Generative Reef",
-            tagline: "Recursive coral branches grow with bass while treble illuminates polyps and drifting life.",
-            gesture: "Canvas · drag moves the underwater current · wheel changes reef scale · zones cultivate local growth",
+            family: "Mandelbrot Reef",
+            tagline: "A continuously evolving Mandelbrot field zooms through coral-like boundaries while beats punch, rotate, and recolor its geometry.",
+            gesture: "Canvas · drag steers the camera · wheel changes base scale · set Zoom Direction below to travel inward, outward, or hold",
             accent: [30, 235, 175],
         },
         "thevisualizer.gravity-wells" => InstrumentProfile {

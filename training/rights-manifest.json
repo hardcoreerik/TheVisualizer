@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "status": "approved-by-project-owner-2026-07-29",
+  "trigger_token": "tvizfield",
+  "rules": {
+    "include": "Only user-owned or project-generated still images with confirmed derivative-training permission.",
+    "exclude": "Icons, motion duplicates, third-party imagery, and any file without confirmed permission."
+  },
+  "candidates": [
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_55 PM (1).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_56 PM (2).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_56 PM (3).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_56 PM (4).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_56 PM (5).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_57 PM (6).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_57 PM (7).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_57 PM (8).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_57 PM (9).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "Sample Images/ChatGPT Image Jul 29, 2026, 12_55_58 PM (10).png", "provenance": "user-provided project generation", "approved": true },
+    { "path": "assets/living-photograph-greenhouse.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/event-horizon-hero.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/astronomical-object-atlas.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/comet-waveform-field.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/cosmic-object-parallax.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/gravity-wave-field.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/horizon-crossing-pov.png", "provenance": "project-generated still", "approved": true },
+    { "path": "assets/event-horizon/nebula-depth-field.png", "provenance": "project-generated still", "approved": true }
+  ]
+}

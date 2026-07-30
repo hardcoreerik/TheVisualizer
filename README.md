@@ -18,7 +18,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - Waveform, spectrum, energy, and frequency-band analysis
 - Live newest-sample-to-feature age telemetry with current, average, peak, and separate FFT-window timing
 - Automatic default-output recovery timing from detection through stream open and first capture packet
-- Twenty-eight bundled visuals: Neon Scope, Particle Forge, Studio, seventeen original WGSL presets, and eight licensed ISF adaptations grouped under `Imported · ISF`
+- Thirty-nine bundled visuals: Neon Scope, Particle Forge, Studio, Visual Canvas, twenty-seven original format-2 WGSL presets (including ten full-screen Sampled · Visual Fields modes, Cascading Falls, and Event Horizon), and eight licensed ISF adaptations under `Imported · ISF`
 - Zone Studio turns each of up to eight shared zones into an independently placed GPU visual: Pulse Trace, Spectrum Skyline, Radial Burst, Spectrogram City, Spectral Terrain, Wave Tunnel, Particle Ocean, Wireframe Terrain, Halo Spectrum, or Atomic Orbits. Each exposes band, scale, strength, rotation, speed, density, thickness, trails, and color shift.
 - A mode-aware `Instrument [I]` panel with a unique identity, accent, interaction guide, and inline control families for every visual; `Mode [O]` detaches the same active controls, `Forge [F]` inspects the selected 3D force node, and `Performance [P]` owns GPU A/B mixing
 - A searchable, categorized `Visual Library [L]` with session favorites; `H` independently hides visual labels
@@ -57,11 +57,13 @@ This is not a signed public release. See [Windows Packaging](docs/PACKAGING.md).
 
 ## Remaining v0.1 work
 
-- Clean-machine, device-loss, mixed-DPI, multi-monitor, and broader GPU validation
+- Land the development branch into protected `main` (public `main` is still an empty initialize commit)
+- Expanded portable package smoke and clean-machine validation
+- Device-loss, mixed-DPI, multi-monitor, and broader GPU validation
 - Externally measured playback-to-display latency
 - Public-release validation
 
-The detailed boundary is defined in [v0.1 Scope](docs/V0.1_SCOPE.md).
+The detailed boundary and milestone gates are in [v0.1 Scope](docs/V0.1_SCOPE.md) and the [Roadmap](ROADMAP.md).
 
 ## Extensions
 
@@ -86,8 +88,10 @@ Performance Studio can receive MIDI CC/note mappings and localhost OSC messages 
 - [Architecture Decisions](docs/DECISIONS.md)
 - [Windows Packaging](docs/PACKAGING.md)
 - [Licensing](docs/LICENSING.md)
+- [ISF Imports](docs/ISF_IMPORTS.md)
 - [Embedded Vision](docs/EMBEDDED_VISION.md)
 - [Open Questions](docs/OPEN_QUESTIONS.md)
+- [Offline AI Pack](docs/AI_PACK.md) (experimental; not a v0.1 exit requirement)
 
 ## License
 

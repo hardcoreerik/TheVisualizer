@@ -1,15 +1,15 @@
 # Project Truth
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 This document records verified project state. Planned behavior belongs in the [Roadmap](ROADMAP.md) and design documents, not in this file.
 
 ## Verified locally
 
 - `F:\Ai\TheVisualizer` began as an empty directory.
-- A Git repository was initialized with protected source-of-truth branch `main` and GitHub remote `origin`.
-- The implementation and documentation foundation is being authored on `docs/project-foundation`; it is published as a review lane and is not merged into `main`.
-- On 2026-07-28, `origin/main` remained at baseline commit `be7a8e0` while `origin/docs/project-foundation` was at `966138c` before the Studio checkpoint.
+- A Git repository was initialized with protected source-of-truth branch `main` and GitHub remote `origin` (`https://github.com/hardcoreerik/TheVisualizer`, public).
+- The implementation and documentation foundation is authored on `docs/project-foundation`; it is published as a review lane and is **not** merged into `main`.
+- On 2026-07-30, `origin/main` remained empty initialize commit `be7a8e0` (zero tree files). `origin/docs/project-foundation` tracked through Visual Canvas commit `aebd6f4`; local uncommitted work includes AI Studio/pack scripts, Event Horizon motion assets, and documentation truth-sync. No GitHub pull requests exist yet.
 - The development host runs Windows.
 - Rust `1.96.0`, Cargo `1.96.0`, Git `2.51.1.windows.1`, CMake, and Ninja were present on `PATH` during the initial scout.
 - Windows reported an AMD Radeon integrated GPU and an NVIDIA GeForce RTX 5070 Ti. Windows PnP currently marks the AMD adapter `CM_PROB_DISABLED`; NVIDIA reports `CM_PROB_NONE`.
@@ -51,7 +51,7 @@ This document records verified project state. Planned behavior belongs in the [R
 - Manual or optional 500 ms preset-directory refresh and keyboard/dropdown selection. The host compiles replacements inside a wgpu validation scope and retains the last working pipeline when validation fails.
 - Startup skips rejected preset shaders until one compiles, and refresh can initialize the GPU renderer after starting with no valid shader.
 - Thirty-five format-2 WGSL presets with 10–35 grouped controls: twenty-seven Apache-2.0 originals and eight modified MIT ISF adaptations pinned to VIDVOX ISF-Files revision `395072d48b3ce7351ccb20a5fda54470591324df`. The other 319 reviewed ISF shaders require unsupported textures, persistent buffers, multiple passes, or transition inputs and remain excluded. Cascading Falls and the sampled history modes read bounded spectrum history through a host-owned GPU storage buffer.
-- Event Horizon 0.2 is a procedural deep-space rebuild with three depth-scaled star layers, colored twinkle, nebula matter, gravitational star warping, a turbulent inclined accretion disk, Doppler beaming, back-disk lensing, a photon ring, relativistic jets, bloom, vignetting, and film grain. Its 23 controls route bass, mids, treble, onset, and per-band spectrum energy without adding image assets.
+- Event Horizon 0.2 combines its procedural GPU scene with three bounded, locally generated motion clips loaded only when selected. Calm audio advances an orbiting black-hole scene; onsets/transients select a moving comet and gravity-distortion event; sustained energy plus an onset selects a first-person horizon crossing. One animated texture is uploaded at a time, while the 31 visible controls retain photographic mix, nebula/object motion, waveform tails, gravity waves, and crossing behavior. The high-resolution generated PNGs remain source/inspiration assets and are not packaged or uploaded at runtime. Targeted Rust motion/journey/UV tests and bundled WGSL validation pass; live musical calibration and FPS remain unverified.
 - `L` opens a searchable Visual Library that categorizes all thirty-five presets plus Neon Scope, Particle Forge, Studio, and Visual Canvas into a thirty-nine-visual inventory, including dedicated `Sampled · Visual Fields` and `Imported · ISF` families, and supports up to 32 session favorites. `H` independently toggles visual labels. The compact overlay retains five direct visual-family buttons and previous/next preset controls instead of duplicating the complete preset list.
 - Instrument presents a distinct family name, accent, purpose statement, and control guide for every one of the thirty-nine visuals. The selected WGSL preset's metadata-defined control families render inline in `I`; Neon Scope exposes trail response, Particle Forge exposes its complete field/topology/material controls, Studio retains its layer/media controls, and Visual Canvas exposes tools, preset/host backgrounds, form layers, and selected-form appearance. `O` remains a detachable view of the same active mode controls rather than a second ownership model.
 - Instrument's Colors & Materials section includes global manual hue shift and bidirectional automatic color phasing. The same focused controls open with `F` outside Particle Forge; in Particle Forge, `F` retains the selected 3D force-node inspector. Color motion feeds GPU preset palettes, Scope gradients, Particle Forge materials, and visible handles, resets with `Shift+R`, and persists in saved scenes while older scenes restore zero motion.
@@ -235,7 +235,10 @@ This document records verified project state. Planned behavior belongs in the [R
 
 ## Current gates
 
-1. Run an externally timestamped playback-to-display latency test and decide whether the default-device poll's unmeasured 0–1000 ms detection interval is acceptable.
-2. Enable the AMD display adapter outside TheVisualizer only when display disruption is acceptable, then rerun the forced WGSL probe; it is currently disabled by Windows with Code 22.
-3. Validate resize and presentation continuity on another system with multiple active monitors and mixed DPI; this host exposes one active 96-DPI HP X34.
-4. Validate the portable package on a separate clean Windows machine and decide whether v0.1 needs an installer.
+1. Open and land a reviewed PR so public `main` is no longer an empty initialize commit (requires explicit approval to open/merge).
+2. Run one expanded `scripts/package-windows.ps1` smoke that matches the current preset/plugin/asset inventory; record staged and fresh checksums plus launch/capture on the development host.
+3. Run an externally timestamped playback-to-display latency test and decide whether the default-device poll's unmeasured 0–1000 ms detection interval is acceptable.
+4. Enable the AMD display adapter outside TheVisualizer only when display disruption is acceptable, then rerun the forced WGSL probe; it is currently disabled by Windows with Code 22.
+5. Validate resize and presentation continuity on another system with multiple active monitors and mixed DPI; this host exposes one active 96-DPI HP X34.
+6. Validate the portable package on a separate clean Windows machine and decide whether v0.1 needs an installer.
+7. Keep README, Roadmap, Open Questions, and this file synchronized; do not claim experimental AI Pack/Studio work as v0.1 exit criteria.

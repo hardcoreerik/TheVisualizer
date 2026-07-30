@@ -88,9 +88,9 @@ The scene is procedural. It does not currently use downloaded city photography, 
 
 ## Studio prototype
 
-The development tree adds a fourth visual, `Studio · Living Photograph`. It composites a bounded stack of up to eight Image, GPU Preset, Waveform, and Particles layers. Each layer can be hidden, removed, scaled, assigned Full/Bass/Mid/Treble routing, and given bounded reactivity. Image and host-painted layers can be reordered and expose opacity where supported; waveform and particle layers offer Normal or Add blending. One opaque GPU-preset base stays below the other layers and can switch among all discovered presets. The image layer uses Normal blending and accepts local PNG, JPEG, or WebP files by native desktop drag and drop.
+`Studio · Living Photograph` composites a bounded stack of up to ten Image, GPU Preset, Waveform, and Particles layers. Each layer can be hidden, removed, scaled, assigned Full/Bass/Mid/Treble routing, and given bounded reactivity. Image and host-painted layers can be reordered and expose opacity where supported; waveform and particle layers offer Normal or Add blending. One opaque GPU-preset base stays below the other layers and can switch among all discovered presets. The image layer uses Normal blending and accepts local PNG, JPEG, static WebP, and animated WebP by native desktop drag and drop.
 
-The first composition bundles one original photorealistic rainy-greenhouse image. Audio applies restrained exposure and crop movement to that image while the existing waveform and particle instruments render above it. Lower image opacity reveals the optional GPU-preset base. The decoder rejects files over 64 MiB, images over 8192 pixels on either edge, and decoding allocations over 256 MiB. Studio composition persistence, offscreen effects, and image generation inside the player are not implemented.
+The default composition bundles one original photorealistic rainy-greenhouse still plus a 49-frame animated WebP and an optional three-region 2.5D foliage rig. Optional waveform and particle layers default off so the photographic treatment stays primary. The decoder rejects files over 64 MiB, images over 8192 pixels on either edge, and decoding allocations over 256 MiB. Broader Studio composition formats, offscreen effects beyond Normal/Add, and image generation inside the player are not v0.1 requirements.
 
 ### Ten next studio modes
 
@@ -120,5 +120,5 @@ The player discovers scenes from `%LOCALAPPDATA%\TheVisualizer\scenes`; `THEVISU
 - The host stores at most eight sound zones and forty finite parameters per mode.
 - Parameters, camera state, colors, materials, and zones use fixed-size host-owned GPU buffers.
 - Presets receive values only; they do not receive pointer APIs, native window handles, or direct GPU ownership.
-- Format 1 remains loadable. All eight bundled GPU presets now use format 2.
-- The current shader effects are bounded per frame; no persistent GPU particle simulation or collision solver exists yet.
+- Format 1 remains loadable. Bundled GPU presets use format 2 (thirty-five packages in the development tree).
+- Particle Forge is a host-owned GPU compute particle path with fixed quality budgets; other shader effects remain bounded per frame without a general collision solver.

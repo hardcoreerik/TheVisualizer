@@ -38,6 +38,8 @@ These are project decisions, not verified implementation results. Supersede deci
 
 **Rationale:** Their schemas and timing requirements should come from concrete devices and use cases.
 
+**Superseded in part by D-018:** Performance Studio implements bounded MIDI and localhost OSC as host-owned control lanes. Broader sensors, telemetry, and non-localhost network adapters remain deferred.
+
 ## D-007 — Dual extension model
 
 **Decision:** Support declarative WGSL presets and a new versioned cross-platform C ABI for native plugins.
@@ -105,3 +107,15 @@ These are project decisions, not verified implementation results. Supersede deci
 **Decision:** Persist named creative views in a new bounded `.tvscene` value format rather than modifying `.tvpreset` packages or serializing renderer internals.
 
 **Rationale:** A user should be able to return to tuned sliders, colors, materials, zones, and camera state across launches. Keeping snapshots host-owned preserves immutable preset provenance, works for both built-in and WGSL modes, and prevents a saved view from gaining shader or native-code execution.
+
+## D-018 — Bounded Performance Studio external control
+
+**Decision:** Allow Performance Studio to receive MIDI CC/note mappings and localhost-only OSC under `/thevisualizer`, and allow ABI-v2 plugins eight host-owned external controller lanes. Do not treat this as a general sensor, telemetry, or remote-control product surface.
+
+**Rationale:** Live performance mixing needs immediate external knobs without opening a marketplace of network adapters. Localhost and explicit MIDI keep the attack surface bounded while preserving room for later, separately approved input adapters.
+
+## D-019 — Experimental offline AI lane is outside v0.1 exit
+
+**Decision:** Keep offline AI Pack / AI Studio / LoRA training as an optional local experimental lane. It is not required for Windows desktop v0.1 acceptance and must not block audio capture or rendering.
+
+**Rationale:** Image generation and model packaging have separate license, hash, hardware, and product-risk gates from the core visualizer player.

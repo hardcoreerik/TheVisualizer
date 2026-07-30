@@ -1,3 +1,6 @@
 /target/
 /dist/
+/ai-pack/
+/training-output/
+/Sample Images/
 *.pdb

@@ -1214,18 +1214,21 @@ mod tests {
     use super::*;
 
     fn energetic_bass() -> Features {
-        let mut features = Features::default();
-        features.rms = 0.2;
-        features.peak = 0.7;
-        features.low = 0.8;
-        features.mid = 0.3;
-        features.high = 0.1;
-        features.centroid_hz = 900.0;
-        features.rolloff_hz = 3_200.0;
-        features.crest_factor = 2.3;
-        features.transient = 0.7;
-        features.spectrum[4] = 0.8;
-        features
+        let mut spectrum = Features::default().spectrum;
+        spectrum[4] = 0.8;
+        Features {
+            spectrum,
+            rms: 0.2,
+            peak: 0.7,
+            low: 0.8,
+            mid: 0.3,
+            high: 0.1,
+            centroid_hz: 900.0,
+            rolloff_hz: 3_200.0,
+            crest_factor: 2.3,
+            transient: 0.7,
+            ..Features::default()
+        }
     }
 
     #[test]

@@ -1,21 +1,49 @@
 //! format: 2
 //! id: thevisualizer.fractal-reef
 //! name: Fractal Reef
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.7
-//! parameter: Audio|bass-growth|Bass Growth|0.0|3.0|1.4
-//! parameter: Audio|treble-polyps|Treble Polyps|0.0|3.0|1.4
-//! parameter: Reef|branch-count|Branch Count|3.0|14.0|7.0
-//! parameter: Reef|iterations|Iterations|2.0|8.0|5.0
-//! parameter: Reef|branch-width|Branch Width|0.002|0.12|0.025
-//! parameter: Water|current-speed|Current Speed|-3.0|3.0|0.35
-//! parameter: Water|caustics|Caustics|0.0|4.0|1.3
-//! parameter: Life|polyp-glow|Polyp Glow|0.0|4.0|1.5
-//! parameter: Life|spawn-density|Spawn Density|0.0|2.0|0.8
-//! parameter: Camera|drift|Drift|-2.0|2.0|0.06
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-zoom|Bass Zoom|0.0|4.0|1.25
+//! parameter: Audio|mid-drift|Mid Drift|0.0|4.0|0.8
+//! parameter: Audio|treble-detail|Treble Detail|0.0|4.0|1.35
+//! parameter: Audio|onset-punch|Onset Punch|0.0|4.0|1.5
+//! parameter: Audio|beat-rotation|Beat Rotation|0.0|3.0|0.45
+//! parameter: Camera|zoom-direction|Zoom Direction|-1.0|1.0|0.45
+//! parameter: Camera|zoom-speed|Constant Zoom Speed|0.0|3.0|0.42
+//! parameter: Camera|base-zoom|Base Zoom (Stops)|-1.0|18.0|1.4
+//! parameter: Camera|center-x|Center X|-2.0|1.0|-0.743644
+//! parameter: Camera|center-y|Center Y|-1.5|1.5|0.131826
+//! parameter: Camera|orbit|Center Orbit|0.0|2.0|0.18
+//! parameter: Camera|rotation|View Rotation|-3.1416|3.1416|0.0
+//! parameter: Fractal|iterations|Iterations|32.0|320.0|144.0
+//! parameter: Fractal|escape-radius|Escape Radius|2.0|12.0|4.0
+//! parameter: Fractal|exponent|Mandelbrot Exponent|1.5|5.0|2.0
+//! parameter: Fractal|julia-morph|Julia Morph|0.0|1.0|0.0
+//! parameter: Fractal|julia-x|Julia X|-1.5|1.5|-0.745
+//! parameter: Fractal|julia-y|Julia Y|-1.5|1.5|0.113
+//! parameter: Fractal|orbit-trap|Orbit Trap|0.0|4.0|1.15
+//! parameter: Fractal|boundary-glow|Boundary Glow|0.0|5.0|1.6
+//! parameter: Color|bands|Color Bands|1.0|32.0|10.0
+//! parameter: Color|palette-speed|Palette Motion|-3.0|3.0|0.18
+//! parameter: Color|palette-phase|Palette Phase|0.0|1.0|0.58
+//! parameter: Color|saturation|Saturation|0.0|2.0|1.2
+//! parameter: Color|contrast|Contrast|0.2|4.0|1.35
+//! parameter: Color|exposure|Exposure|0.1|4.0|1.15
+//! parameter: Reef|caustics|Caustics|0.0|4.0|0.9
+//! parameter: Reef|symmetry|Coral Symmetry|1.0|12.0|5.0
+//! parameter: Reef|polyp-glow|Polyp Glow|0.0|4.0|1.25
+//! parameter: Reef|depth-fog|Depth Fog|0.0|2.0|0.55
+//! parameter: Reef|spores|Spore Density|0.0|2.0|0.42
+//! parameter: Motion|current-warp|Current Warp|0.0|3.0|0.38
+//! parameter: Motion|stereo-bend|Stereo Bend|0.0|3.0|0.55
+//! parameter: Lens|color-separation|Color Separation|0.0|3.0|0.45
+//! parameter: Lens|detail-shimmer|Detail Shimmer|0.0|3.0|0.75
+//! parameter: Lens|vignette|Vignette|0.0|2.0|0.6
+//! parameter: Reef|reef-mix|Reef Texture Mix|0.0|1.0|0.72
+//! parameter: Motion|time-direction|Time Direction|-1.0|1.0|1.0
+//! parameter: Motion|motion-phase|Motion Phase|0.0|20.0|0.0
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
@@ -32,38 +60,165 @@ struct ModeParameters { values: array<f32, 40> }
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
-    let res = max(uniforms.resolution, vec2f(1.0));
-    var uv = (p.xy * 2.0 - res) / res.y;
-    uv /= max(scene.values[4], 0.35);
-    uv.x += sin(uv.y * 2.0 + uniforms.time * controls.values[6]) * 0.05;
-    let response = controls.values[0];
-    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
-    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
-    var q = uv;
-    var reef = 0.0;
-    var tips = 0.0;
-    let iterations = i32(floor(controls.values[4] + 0.5));
-    for (var i = 0; i < 8; i += 1) {
-        if i < iterations {
-            q = abs(q) / max(dot(q, q), 0.16) - vec2f(0.72 + bass * controls.values[1] * 0.03, 0.48);
-            let branch = exp(-abs(length(q) - 0.55) / max(controls.values[5], 0.002));
-            reef += branch / (1.0 + f32(i));
-            tips += exp(-length(q - vec2f(0.0, 0.52)) * 18.0) / (1.0 + f32(i) * 0.4);
+
+fn rotate(point: vec2f, angle: f32) -> vec2f {
+    let c = cos(angle);
+    let s = sin(angle);
+    return mat2x2f(c, s, -s, c) * point;
+}
+
+fn hash21(point: vec2f) -> f32 {
+    var p = fract(point * vec2f(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 0.6666667, 0.3333333);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+
+struct FractalSample {
+    smooth_iteration: f32,
+    inside: f32,
+    trap: f32,
+    radius: f32,
+}
+
+fn mandelbrot(point: vec2f, julia_mix: f32, max_iterations: i32, escape_radius: f32, power: f32) -> FractalSample {
+    let julia_constant = vec2f(controls.values[17], controls.values[18]);
+    let c = mix(point, julia_constant, julia_mix);
+    var z = mix(vec2f(0.0), point, julia_mix);
+    var escaped = false;
+    var iteration = 0.0;
+    var trap = 1000.0;
+    var radius = 0.0;
+    for (var i = 0; i < 320; i += 1) {
+        if i < max_iterations && !escaped {
+            radius = length(z);
+            trap = min(trap, min(abs(z.x), abs(z.y)));
+            if radius > escape_radius {
+                escaped = true;
+                iteration = f32(i) + 1.0 - log2(max(log2(max(radius, 1.0001)), 0.0001));
+            } else {
+                let angle = atan2(z.y, z.x) * power;
+                let magnitude = pow(max(radius, 0.000001), power);
+                z = magnitude * vec2f(cos(angle), sin(angle)) + c;
+                iteration = f32(i);
+            }
         }
     }
+    return FractalSample(
+        iteration / max(f32(max_iterations), 1.0),
+        select(1.0, 0.0, escaped),
+        trap,
+        radius
+    );
+}
+
+fn sample_color(point: vec2f, detail_audio: f32, time: f32) -> vec3f {
+    let iterations = i32(clamp(controls.values[13] + detail_audio * 48.0, 32.0, 320.0));
+    let sample = mandelbrot(
+        point,
+        controls.values[16],
+        iterations,
+        controls.values[14],
+        controls.values[15]
+    );
+    let bands = controls.values[21];
+    let palette_motion = time * controls.values[22] + controls.values[23];
+    let band_phase = fract(sample.smooth_iteration * bands + palette_motion);
+    let routed_phase = 0.5 + 0.5 * sin((band_phase + palette_motion) * 6.2831853);
+    let routed_color = mix(
+        vec3f(scene.values[76], scene.values[77], scene.values[78]),
+        vec3f(scene.values[84], scene.values[85], scene.values[86]),
+        routed_phase
+    );
+    let spectral = hsv(
+        band_phase + controls.values[23],
+        controls.values[24],
+        0.35 + 0.65 * pow(band_phase, 0.55)
+    );
+    let boundary = exp(-abs(fract(sample.smooth_iteration * bands) - 0.5) * 8.0)
+        * controls.values[20];
+    let trap = exp(-sample.trap * (20.0 + controls.values[19] * 45.0))
+        * controls.values[19];
+    let interior = sample.inside * (0.025 + trap * 0.35);
+    return mix(spectral, routed_color, 0.58) * (0.18 + boundary * 0.42 + trap * 0.35)
+        + routed_color * interior;
+}
+
+@fragment fn fs_main(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    var uv = (pixel.xy * 2.0 - resolution) / resolution.y;
+    uv /= max(scene.values[4], 0.35);
+
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mids = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let treble = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let beat = clamp(extras.onset + extras.transient * 0.65, 0.0, 1.5);
+    let time = (uniforms.time + controls.values[39]) * controls.values[38];
+
+    let zoom_clock = time * controls.values[7] * controls.values[6] * 0.16
+        + bass * controls.values[1] * 0.12
+        + beat * controls.values[4] * 0.08;
+    let magnification = exp2(clamp(controls.values[8] + zoom_clock, -2.0, 24.0));
+    let orbit = controls.values[11] / max(sqrt(magnification), 1.0);
+    let center = vec2f(controls.values[9], controls.values[10])
+        + orbit * vec2f(
+            sin(time * 0.17 + mids * controls.values[2]),
+            cos(time * 0.13 + mids * controls.values[2])
+        );
+    let rotation = controls.values[12]
+        + beat * controls.values[5] * 0.15
+        + time * controls.values[5] * 0.012;
+    uv = rotate(uv, rotation);
+    uv.x += sin(uv.y * 3.0 + time * 0.31) * controls.values[32] * 0.012;
+    uv.y += sin(uv.x * 2.5 - time * 0.27) * controls.values[32] * 0.01;
+    let stereo = features.waveform[64] - features.waveform[192];
+    uv.x += stereo * controls.values[33] * 0.018;
+    let point = center + uv / magnification;
+
+    let separation = controls.values[34] / max(magnification, 1.0) * 0.0008;
+    let detail_audio = treble * controls.values[3] + beat * 0.35;
+    var color = sample_color(point, detail_audio, time);
+    if controls.values[34] > 0.001 {
+        let red = sample_color(point + vec2f(separation, 0.0), detail_audio, time).r;
+        let blue = sample_color(point - vec2f(separation, 0.0), detail_audio, time).b;
+        color = vec3f(red, color.g, blue);
+    }
+
     let angle = atan2(uv.y, uv.x);
-    reef *= 0.45 + 0.55 * pow(max(0.0, cos(angle * controls.values[3])), 4.0);
-    let caustic = pow(max(0.0, sin(uv.x * 18.0 + sin(uv.y * 11.0) + uniforms.time * 1.7)), 12.0)
-        * controls.values[7];
-    let spores = step(0.993 - controls.values[9] * 0.01,
-        hash21(floor((uv + vec2f(0.0, uniforms.time * 0.03)) * 55.0)));
-    var color = routed(88u) * mix(0.55, 0.2, clamp(uv.y + 0.5, 0.0, 1.0));
-    color += mix(routed(76u), routed(80u), 0.5 + 0.5 * sin(angle * 3.0)) * reef * (0.22 + bass * 0.35);
-    color += routed(84u) * tips * controls.values[8] * (0.2 + high * controls.values[2] + extras.onset);
-    color += routed(72u) * caustic * 0.11 + routed(80u) * spores * high * 0.4;
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.75 + scene.values[92]));
-    return vec4f(color, 1.0);
+    let symmetry = max(1.0, floor(controls.values[28] + 0.5));
+    let coral = pow(max(0.0, cos(angle * symmetry + time * 0.08)), 8.0);
+    let caustic = pow(max(
+        0.0,
+        sin(uv.x * 18.0 + sin(uv.y * 13.0 + time) + time * 1.2)
+    ), 14.0) * controls.values[27];
+    let polyp = pow(max(0.0, sin(angle * symmetry * 3.0 + magnification * 0.0001)), 20.0)
+        * controls.values[29] * (0.2 + treble + beat);
+    let spores = step(
+        0.998 - controls.values[31] * 0.004,
+        hash21(floor((uv + vec2f(time * 0.01, -time * 0.018)) * 110.0))
+    ) * (0.1 + treble);
+    let reef_texture = coral * 0.14 + caustic * 0.08 + polyp * 0.12 + spores * 0.35;
+    color += mix(vec3f(0.0), vec3f(scene.values[72], scene.values[73], scene.values[74])
+        * reef_texture, controls.values[37]);
+
+    let shimmer = 1.0 + sin(
+        (uv.x + uv.y) * 220.0 + time * 4.0
+    ) * treble * controls.values[35] * 0.035;
+    color *= shimmer;
+    color = pow(max(color, vec3f(0.0)), vec3f(1.0 / controls.values[25]));
+    color = 1.0 - exp(-color * controls.values[26] * (0.8 + scene.values[92]));
+    let fog = 1.0 - exp(-length(uv) * controls.values[30] * 0.32);
+    color = mix(color, vec3f(scene.values[88], scene.values[89], scene.values[90]) * 0.18, fog);
+    let vignette = 1.0 - smoothstep(
+        0.35,
+        1.45,
+        length(uv) * (0.8 + controls.values[36] * 0.3)
+    ) * controls.values[36] * 0.45;
+    return vec4f(color * vignette, 1.0);
 }
