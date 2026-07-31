@@ -1,0 +1,59 @@
+//! format: 2
+//! id: isf.vidvox.color-schemes
+//! name: ISF · Chromatic Atlas
+//! version: 0.1.0
+//! author: VIDVOX; TheVisualizer WGSL and audio adaptation
+//! license: MIT
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Palette|base-hue|Base Hue|0.0|1.0|0.58
+//! parameter: Palette|harmony|Harmony|0.0|7.0|2.0
+//! parameter: Palette|color-count|Color Count|2.0|18.0|7.0
+//! parameter: Geometry|radial|Radial Mix|0.0|1.0|0.65
+//! parameter: Geometry|rotation|Rotation|-3.0|3.0|0.16
+//! parameter: Geometry|zoom|Zoom|0.2|4.0|1.15
+//! parameter: Audio|bass-turn|Bass Turn|0.0|3.0|1.0
+//! parameter: Audio|mid-hue|Mid Hue|0.0|3.0|1.1
+//! parameter: Audio|treble-edge|Treble Edge|0.0|3.0|0.9
+//! parameter: Palette|saturation|Saturation|0.0|1.5|0.82
+//! parameter: Palette|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = fract(vec3f(h) + vec3f(0.0, 0.666667, 0.333333)) * 6.0;
+    return v * mix(vec3f(1.0), clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y * controls.values[6];
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let angle = atan2(uv.y, uv.x) / 6.283185 + 0.5 + uniforms.time * controls.values[5] * 0.025
+        + bass * controls.values[7] * 0.04;
+    let linear = fract(p.x / res.x + scene.values[0] * 0.2);
+    let coordinate = mix(linear, angle + length(uv) * 0.08, controls.values[4]);
+    let count = max(controls.values[3], 2.0);
+    let cell = floor(coordinate * count);
+    let harmony = floor(controls.values[2] + 0.5);
+    let interval = select(0.0833, select(0.1667, select(0.3333, 0.5, harmony < 2.5), harmony < 4.5), harmony < 6.5);
+    let hue = fract(controls.values[1] + cell * interval + mid * controls.values[8] * 0.05);
+    let edge = 1.0 - smoothstep(0.0, 0.04, abs(fract(coordinate * count) - 0.5));
+    var color = hsv(hue, controls.values[10], 0.72 + edge * high * controls.values[9] * 0.35);
+    color += hsv(fract(hue + 0.5), 0.55, 1.0) * edge * (0.06 + extras.onset * 0.18);
+    color = 1.0 - exp(-color * controls.values[11]);
+    return vec4f(color, 1.0);
+}

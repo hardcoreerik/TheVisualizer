@@ -1,0 +1,60 @@
+//! format: 2
+//! id: thevisualizer.spectral-terrain
+//! name: Spectral Terrain
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Terrain|height|Peak Height|0.1|2.0|0.85
+//! parameter: Terrain|rows|Terrain Rows|6.0|32.0|18.0
+//! parameter: Terrain|columns|Grid Columns|6.0|48.0|24.0
+//! parameter: Camera|perspective|Perspective|0.2|2.0|1.0
+//! parameter: Motion|flight|Forward Flight|-3.0|3.0|0.35
+//! parameter: Surface|wireframe|Wireframe|0.0|2.0|0.8
+//! parameter: Color|phase|Elevation Phase|-1.0|1.0|0.0
+//! parameter: Surface|fog|Distance Fog|0.0|2.0|0.9
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.05
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32, history_rows: f32, history_bands: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+struct SpectrumHistory { values: array<f32, 8192> }
+@group(0) @binding(5) var<storage, read> history: SpectrumHistory;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = p.xy / res;
+    let depth = clamp((uv.y - 0.12) / 0.88, 0.0, 0.999);
+    let spread = mix(0.22, controls.values[4], depth);
+    let sx = clamp((uv.x - 0.5) / max(spread, 0.05) + 0.5, 0.0, 0.999);
+    let scroll = fract(depth + uniforms.time * controls.values[5] * 0.02);
+    let rows = max(u32(extras.history_rows), 1u);
+    let row = min(u32((1.0 - scroll) * f32(rows)), rows - 1u);
+    let band = min(u32(sx * 64.0), 63u);
+    let energy = clamp(history.values[row * 64u + band] * controls.values[0] * uniforms.gain, 0.0, 1.5);
+    let ridge_y = 0.84 - depth * 0.58 - energy * controls.values[1] * (0.025 + depth * 0.12);
+    let row_phase = fract(depth * controls.values[2] + uniforms.time * controls.values[5] * 0.15);
+    let row_line = glow(abs(fract((uv.y - ridge_y) * controls.values[2]) - 0.5), 0.055);
+    let column_line = glow(abs(fract(sx * controls.values[3]) - 0.5), 0.06);
+    let surface = step(ridge_y, uv.y) * (0.22 + energy * 0.65);
+    let wire = (row_line + column_line * 0.6) * controls.values[6];
+    let phase = clamp(energy * 0.7 + depth * 0.3 + controls.values[7] * 0.15, 0.0, 1.0);
+    var color = mix(routed(76u), routed(84u), phase) * (surface * 0.35 + wire);
+    color += routed(72u) * glow(abs(uv.y - ridge_y), 0.006) * (0.5 + extras.onset);
+    color = mix(color, routed(88u) * 0.15, clamp((1.0 - depth) * controls.values[8] * 0.45, 0.0, 0.75));
+    color += routed(80u) * row_phase * 0.015;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}

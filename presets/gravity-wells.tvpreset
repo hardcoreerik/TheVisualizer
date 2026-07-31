@@ -1,0 +1,97 @@
+//! format: 2
+//! id: thevisualizer.gravity-wells
+//! name: Gravity Wells
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-mass|Bass Mass|0.0|3.0|1.4
+//! parameter: Audio|treble-sparks|Treble Sparks|0.0|3.0|1.2
+//! parameter: Geometry|well-size|Well Size|0.05|0.7|0.24
+//! parameter: Geometry|lens-strength|Lens Strength|0.0|2.0|0.75
+//! parameter: Particles|star-density|Star Density|0.1|1.0|0.72
+//! parameter: Particles|orbit-speed|Orbit Speed|-3.0|3.0|0.7
+//! parameter: Particles|trail-length|Trail Length|0.0|2.0|0.8
+//! parameter: Surface|event-glow|Event Glow|0.0|3.0|1.5
+//! parameter: Physics|zone-gravity|Zone Gravity|0.0|2.0|0.85
+//! parameter: Camera|rotation|Rotation|-2.0|2.0|0.08
+//! parameter: Scene|seed|Seed|0.0|999.0|41.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras {
+    delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32,
+    onset: f32, transient: f32,
+}
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let vertices = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(vertices[index], 0.0, 1.0);
+}
+
+fn hash21(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+fn routed(offset: u32) -> vec3f {
+    return vec3f(scene.values[offset], scene.values[offset + 1u], scene.values[offset + 2u]);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    let aspect = resolution.x / resolution.y;
+    var uv = (position.xy * 2.0 - resolution) / resolution.y;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let yaw = scene.values[2] + uniforms.time * controls.values[10];
+    let zoom = max(scene.values[4], 0.35);
+    let angle = yaw + atan2(uv.y, uv.x);
+    uv /= zoom;
+
+    var warped = uv;
+    var gravity = 0.0;
+    for (var index = 0u; index < 8u; index += 1u) {
+        if f32(index) < scene.values[0] {
+            let offset = 8u + index * 8u;
+            let center = vec2f(
+                (scene.values[offset] * 2.0 - 1.0) * aspect,
+                scene.values[offset + 1u] * 2.0 - 1.0
+            );
+            let delta = warped - center;
+            let distance = max(length(delta), 0.035);
+            let energy = scene.values[offset + 3u] * scene.values[offset + 6u];
+            let pull = controls.values[9] * (0.015 + energy * 0.045) / distance;
+            warped -= normalize(delta) * pull;
+            gravity += pull / distance;
+        }
+    }
+
+    let radius = length(warped);
+    let well_radius = controls.values[3] * (1.0 + bass * controls.values[1] * 0.08);
+    let ring = 0.012 / max(abs(radius - well_radius), 0.006);
+    let lens = sin(radius * (34.0 + controls.values[4] * 22.0) - uniforms.time * 2.0)
+        * exp(-radius * 2.8) * controls.values[4];
+    let star_cell = floor((warped + vec2f(angle, 0.0)) * (45.0 + controls.values[5] * 85.0));
+    let stars = step(0.985 - controls.values[5] * 0.012, hash21(star_cell + controls.values[11]));
+    let orbit = sin(angle * 7.0 + radius * 22.0 - uniforms.time * controls.values[6])
+        * exp(-abs(radius - 0.55 - lens * 0.03) * (8.0 + controls.values[7] * 5.0));
+
+    var color = routed(88u) * 0.45;
+    color += routed(84u) * stars * (0.18 + high * controls.values[2]);
+    color += mix(routed(76u), routed(80u), 0.5 + 0.5 * sin(angle))
+        * orbit * orbit * (0.2 + bass);
+    color += routed(72u) * ring * controls.values[8] * (0.08 + bass * 0.2);
+    color += routed(76u) * gravity * 0.025;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * (0.8 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

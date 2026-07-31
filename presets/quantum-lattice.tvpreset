@@ -1,0 +1,73 @@
+//! format: 2
+//! id: thevisualizer.quantum-lattice
+//! name: Quantum Lattice
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-fold|Bass Fold|0.0|3.0|1.3
+//! parameter: Audio|treble-nodes|Treble Nodes|0.0|3.0|1.4
+//! parameter: Lattice|cell-density|Cell Density|3.0|30.0|12.0
+//! parameter: Lattice|line-width|Line Width|0.002|0.12|0.025
+//! parameter: Lattice|depth-layers|Depth Layers|2.0|12.0|6.0
+//! parameter: Physics|phase-warp|Phase Warp|0.0|3.0|1.0
+//! parameter: Physics|tunnel-speed|Tunnel Speed|-4.0|4.0|0.65
+//! parameter: Nodes|node-glow|Node Glow|0.0|4.0|1.6
+//! parameter: Nodes|entanglement|Entanglement|0.0|3.0|1.1
+//! parameter: Camera|roll|Roll|-2.0|2.0|0.08
+//! parameter: Surface|exposure|Exposure|0.2|3.0|0.9
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn grid(v: vec2f, width: f32) -> f32 {
+    let cell = abs(fract(v) - 0.5);
+    return 1.0 - smoothstep(width, width * 2.0, min(cell.x, cell.y));
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let roll = scene.values[2] + uniforms.time * controls.values[10];
+    let c = cos(roll); let s = sin(roll);
+    uv = vec2f(c * uv.x - s * uv.y, s * uv.x + c * uv.y);
+    var color = routed(88u) * 0.35;
+    let layers = i32(floor(controls.values[5] + 0.5));
+    for (var i = 0; i < 12; i += 1) {
+        if i < layers {
+            let fi = f32(i);
+            let z = fract(fi / max(controls.values[5], 1.0) + uniforms.time * controls.values[7] * 0.08);
+            let scale = mix(1.5, 14.0, z);
+            let phase = sin(length(uv) * 3.0 - z * 8.0 + uniforms.time) * controls.values[6] * 0.15;
+            let cell_uv = (uv + phase * normalize(uv + vec2f(0.001))) * controls.values[3] / scale;
+            let lines = grid(cell_uv, controls.values[4]);
+            let node = exp(-length(fract(cell_uv) - 0.5) * (18.0 + z * 20.0));
+            let band = min(u32(fract(fi * 0.217 + z) * 64.0), 63u);
+            let energy = features.spectrum[band] * response;
+            let fade = smoothstep(0.0, 0.2, z) * smoothstep(1.0, 0.65, z);
+            color += mix(routed(76u), routed(80u), z) * lines * fade * (0.025 + energy * 0.16);
+            color += routed(84u) * node * fade * controls.values[8] * (0.02 + high * controls.values[2] * 0.12);
+        }
+    }
+    let fold = sin((abs(uv.x) + abs(uv.y)) * 7.0 - uniforms.time * 2.0)
+        * bass * controls.values[1] * 0.08;
+    color += routed(72u) * pow(max(0.0, fold), 3.0) * controls.values[9];
+    color += routed(84u) * extras.onset * exp(-length(uv) * 7.0) * 0.7;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.75 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

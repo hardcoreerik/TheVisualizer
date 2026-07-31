@@ -1,0 +1,59 @@
+//! format: 2
+//! id: thevisualizer.halo-spectrum
+//! name: Halo Spectrum
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Halo|radius|Halo Radius|0.12|0.75|0.36
+//! parameter: Halo|bars|Spectrum Bars|16.0|96.0|64.0
+//! parameter: Halo|bar-length|Bar Length|0.1|1.5|0.65
+//! parameter: Waveform|waveform|Center Waveform|0.0|2.0|0.9
+//! parameter: Motion|rotation|Rotation|-3.0|3.0|0.08
+//! parameter: Surface|reflection|Reflection|0.0|1.5|0.55
+//! parameter: Color|rainbow|Rainbow Phase|-1.0|1.0|0.0
+//! parameter: Surface|bloom|Bloom|0.0|4.0|1.6
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.1
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let radius = length(uv);
+    let angle = atan2(uv.y, uv.x) + uniforms.time * controls.values[5];
+    let phase = fract(angle / 6.2831853 + 0.5);
+    let source = min(u32(phase * 64.0), 63u);
+    let energy = clamp(features.spectrum[source] * controls.values[0] * uniforms.gain, 0.0, 1.5);
+    let base = controls.values[1] + energy * 0.025;
+    let bars = pow(max(0.0, cos(angle * controls.values[2] * 0.5)), 24.0);
+    let end = base + 0.025 + energy * controls.values[3] * 0.3;
+    let rays = bars * step(base, radius) * step(radius, end);
+    let halo = glow(abs(radius - base), 0.007 + energy * 0.004);
+    let x = clamp(uv.x / (res.x / res.y) * 0.5 + 0.5, 0.0, 0.999);
+    let wi = min(u32(x * 256.0), 255u);
+    let wave_y = features.waveform[wi] * controls.values[0] * controls.values[4] * 0.18;
+    let wave = glow(abs(uv.y - wave_y), 0.006) * step(abs(uv.x), res.x / res.y * 0.46);
+    let reflected = glow(abs(uv.y + 0.72 + wave_y * 0.3), 0.016) * controls.values[6] * 0.28;
+    let chroma = fract(phase + controls.values[7] * 0.2);
+    var color = routed(88u) * 0.1;
+    color += mix(routed(76u), routed(84u), chroma) * rays * (0.35 + energy);
+    color += routed(80u) * (halo + wave) * (0.7 + extras.transient);
+    color += routed(72u) * (reflected + halo * halo * controls.values[8] * 0.14);
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}

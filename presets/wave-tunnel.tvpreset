@@ -1,0 +1,59 @@
+//! format: 2
+//! id: thevisualizer.wave-tunnel
+//! name: Wave Tunnel
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Tunnel|rings|Ring Density|3.0|18.0|9.0
+//! parameter: Tunnel|ribs|Tunnel Ribs|8.0|48.0|24.0
+//! parameter: Tunnel|wave-warp|Wave Warp|0.0|1.5|0.65
+//! parameter: Motion|flight|Flight Speed|-4.0|4.0|0.8
+//! parameter: Motion|roll|Camera Roll|-3.0|3.0|0.14
+//! parameter: Camera|aperture|Aperture|0.08|0.65|0.22
+//! parameter: Color|phase|Ember Phase|-1.0|1.0|0.0
+//! parameter: Surface|glow|Tube Glow|0.0|4.0|1.5
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.05
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+fn rotate(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c*p.x-s*p.y, s*p.x+c*p.y); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    uv = rotate(uv, uniforms.time * controls.values[5] * 0.16);
+    let angle = atan2(uv.y, uv.x);
+    let phase = fract(angle / 6.2831853 + 0.5);
+    let wi = min(u32(phase * 256.0), 255u);
+    let si = min(u32(phase * 64.0), 63u);
+    let wave = features.waveform[wi] * controls.values[0] * controls.values[3];
+    let energy = clamp(features.spectrum[si] * controls.values[0] * uniforms.gain, 0.0, 1.4);
+    let radius = length(uv) + wave * 0.12;
+    let aperture = controls.values[6] * (1.0 + uniforms.audio.x * 0.15);
+    let ring_phase = fract((radius - aperture) * controls.values[1] - uniforms.time * controls.values[4]);
+    let rings = glow(abs(ring_phase - 0.5), 0.055 + energy * 0.018);
+    let ribs = pow(max(0.0, cos(angle * controls.values[2] * 0.5)), 24.0);
+    let tunnel = step(aperture, radius) * (1.0 - smoothstep(0.9, 1.5, radius));
+    let vanishing = glow(radius, aperture * 0.5) * (0.4 + extras.onset);
+    let phase_color = fract(phase + controls.values[7] * 0.2 + radius * 0.2);
+    var color = routed(88u) * 0.1;
+    color += mix(routed(76u), routed(84u), phase_color) * tunnel * (rings * (0.45 + energy) + ribs * 0.45);
+    color += routed(72u) * tunnel * rings * rings * controls.values[8] * 0.24;
+    color += routed(80u) * vanishing;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}

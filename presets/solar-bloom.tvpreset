@@ -1,0 +1,139 @@
+//! format: 2
+//! id: thevisualizer.solar-bloom
+//! name: Solar Bloom
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-pulse|Bass Pulse|0.0|3.0|1.0
+//! parameter: Audio|treble-rays|Treble Rays|0.0|3.0|1.0
+//! parameter: Bloom|petal-count|Petal Count|3.0|20.0|7.0
+//! parameter: Bloom|petal-depth|Petal Depth|0.0|0.4|0.14
+//! parameter: Bloom|bloom-size|Bloom Size|0.05|1.0|0.42
+//! parameter: Bloom|halo-size|Halo Size|0.1|1.5|0.78
+//! parameter: Light|ray-count|Ray Count|2.0|24.0|9.0
+//! parameter: Light|ray-sharpness|Ray Sharpness|2.0|48.0|22.0
+//! parameter: Motion|spin|Spin|-4.0|4.0|0.65
+//! parameter: Physics|zone-blooms|Zone Blooms|0.0|2.0|0.7
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms {
+    resolution: vec2f,
+    time: f32,
+    gain: f32,
+    audio: vec4f,
+}
+
+@group(0) @binding(0)
+var<uniform> uniforms: PresetUniforms;
+
+struct AudioFeatures {
+    waveform: array<f32, 256>,
+    spectrum: array<f32, 64>,
+}
+
+@group(0) @binding(1)
+var<storage, read> features: AudioFeatures;
+
+struct FrameExtras {
+    delta: f32,
+    peak: f32,
+    waveform_len: f32,
+    spectrum_len: f32,
+    onset: f32,
+    transient: f32,
+}
+
+@group(0) @binding(2)
+var<uniform> extras: FrameExtras;
+
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {
+    let positions = array(
+        vec2f(-1.0, -3.0),
+        vec2f(3.0, 1.0),
+        vec2f(-1.0, 1.0),
+    );
+    return vec4f(positions[vertex_index], 0.0, 1.0);
+}
+
+fn palette(t: f32) -> vec3f {
+    return 0.52 + 0.48 * cos(6.28318 * (t + vec3f(0.02, 0.31, 0.58)));
+}
+
+fn saturate_color(color: vec3f, amount: f32) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    return mix(vec3f(luminance), color, amount);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let resolution = max(uniforms.resolution, vec2f(1.0));
+    var uv = (position.xy * 2.0 - resolution) / resolution.y;
+    let gain = controls.values[0];
+    let low = clamp(uniforms.audio.x * gain, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * gain, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * gain, 0.0, 1.5);
+    let rms = clamp(uniforms.audio.w * gain * 3.0, 0.0, 1.5);
+
+    uv += vec2f(sin(uniforms.time * 0.17), cos(uniforms.time * 0.13)) * 0.08;
+    var zone_bloom = 0.0;
+    for (var index = 0u; index < 8u; index += 1u) {
+        if f32(index) < scene.values[0] {
+            let offset = 8u + index * 8u;
+            let center = vec2f(
+                (scene.values[offset] * 2.0 - 1.0) * resolution.x / resolution.y,
+                scene.values[offset + 1u] * 2.0 - 1.0
+            );
+            let energy = scene.values[offset + 3u] * scene.values[offset + 6u];
+            zone_bloom += exp(-length(uv - center) * 5.0) * energy * controls.values[10];
+        }
+    }
+    let radius = length(uv);
+    let angle = atan2(uv.y, uv.x);
+    let phase = fract(angle / 6.28318 + 1.0);
+    let waveform_index = min(u32(phase * 256.0), 255u);
+    let spectrum_index = min(u32(phase * 64.0), 63u);
+    let wave = features.waveform[waveform_index] * gain;
+    let local_spectrum = clamp(features.spectrum[spectrum_index] * gain, 0.0, 1.5);
+    let petals = floor(controls.values[3] + high * 4.0);
+    let edge = controls.values[5]
+        + sin(angle * petals + uniforms.time * controls.values[9])
+            * (controls.values[4] + mid * 0.09)
+        + wave * 0.055;
+    let bloom = abs(radius - edge * (1.0 + low * controls.values[1] * 0.2 + zone_bloom * 0.08));
+    let glow = 0.018 / max(bloom, 0.004);
+    let halo = 0.008 / max(abs(radius - controls.values[6] - low * 0.08), 0.008);
+    let rays = pow(abs(cos(angle * controls.values[7] - uniforms.time * 0.3)), controls.values[8])
+        * smoothstep(1.2, 0.1, radius);
+
+    var color = palette(angle / 6.28318 + uniforms.time * 0.025) * glow;
+    color += palette(0.16 + uniforms.time * 0.018) * halo
+        * (0.2 + low + local_spectrum * 0.4);
+    color += vec3f(1.0, 0.32, 0.06) * rays
+        * (0.04 + high * controls.values[2] * 0.25);
+    color *= 0.3 + smoothstep(1.45, 0.12, radius);
+    let glow_amount = scene.values[92];
+    let gloss = scene.values[93];
+    let finish = scene.values[95];
+    if finish < 0.5 {
+        color *= 0.85 + glow_amount * 0.35;
+    } else if finish < 1.5 {
+        color += pow(max(color, vec3f(0.0)), vec3f(4.0)) * gloss;
+    } else if finish < 2.5 {
+        color *= 0.72;
+    } else if finish < 3.5 {
+        color = mix(color, vec3f(dot(color, vec3f(0.3, 0.55, 0.15))), 0.22 + gloss * 0.25);
+    } else {
+        color = mix(color, color * color + palette(0.16) * 0.04, 0.35 + gloss * 0.35);
+    }
+    color = saturate_color(color, scene.values[94]);
+    color = 1.0 - exp(-color * controls.values[11]
+        * (0.8 + rms * 1.6 + extras.peak * 0.6));
+    return vec4f(color, 1.0);
+}

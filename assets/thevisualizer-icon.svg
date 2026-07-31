@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">TheVisualizer audio waveform mark</title>
+  <defs>
+    <linearGradient id="neon" x1="96" y1="128" x2="416" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5ffff2"/>
+      <stop offset=".52" stop-color="#48a8ff"/>
+      <stop offset="1" stop-color="#b766ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#050812"/>
+  <circle cx="256" cy="256" r="178" fill="#091426" stroke="url(#neon)" stroke-width="18"/>
+  <path d="M102 256h51l34-86 42 174 45-226 45 210 38-119 31 47h22"
+        fill="none" stroke="url(#neon)" stroke-width="28" stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>

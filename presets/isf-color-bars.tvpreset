@@ -1,0 +1,64 @@
+//! format: 2
+//! id: isf.vidvox.color-bars
+//! name: ISF · Broadcast Reactor
+//! version: 0.1.0
+//! author: VIDVOX; TheVisualizer WGSL and audio adaptation
+//! license: MIT
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Pattern|shift|Color Shift|-1.0|1.0|0.0
+//! parameter: Pattern|speed|Shift Speed|-2.0|2.0|0.12
+//! parameter: Pattern|bar-count|Bar Count|3.0|24.0|9.0
+//! parameter: Signal|scanlines|Scanlines|0.0|2.0|0.35
+//! parameter: Signal|bloom|Bloom|0.0|3.0|0.8
+//! parameter: Audio|bass-roll|Bass Roll|0.0|3.0|1.2
+//! parameter: Audio|mid-warp|Mid Warp|0.0|3.0|0.8
+//! parameter: Audio|treble-glitch|Treble Glitch|0.0|3.0|0.65
+//! parameter: Color|saturation|Saturation|0.0|2.0|1.1
+//! parameter: Color|exposure|Exposure|0.2|3.0|0.95
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = fract(vec3f(h) + vec3f(0.0, 0.666667, 0.333333)) * 6.0;
+    return v * mix(vec3f(1.0), clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = p.xy / res;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let glitch = step(0.93, hash21(vec2f(floor(uv.y * 48.0), floor(uniforms.time * 12.0))))
+        * high * controls.values[8] * (0.35 + extras.onset);
+    uv.x = fract(uv.x + controls.values[1] + uniforms.time * controls.values[2]
+        + bass * controls.values[6] * 0.04 + glitch * 0.08);
+    uv.y += sin(uv.x * 20.0 + uniforms.time) * mid * controls.values[7] * 0.006;
+    let count = max(controls.values[3], 3.0);
+    let bar = floor(uv.x * count);
+    var color = hsv(fract(bar / count + 0.02), controls.values[9], 0.76);
+    if (uv.y < 0.125) {
+        color = vec3f(step(0.5, fract(bar * 0.5))) * mix(0.05, 0.9, uv.x);
+    } else if (uv.y < 0.25) {
+        color = vec3f(uv.x);
+    }
+    let edge = 1.0 - smoothstep(0.0, 0.025 + controls.values[5] * 0.012, abs(fract(uv.x * count) - 0.5));
+    color += hsv(fract(bar / count), 0.7, 1.0) * edge * controls.values[5] * (0.06 + high * 0.09);
+    color *= 0.88 + sin(p.y * 3.14159) * controls.values[4] * 0.08;
+    color *= 1.0 + (hash21(p.xy + uniforms.time) - 0.5) * controls.values[8] * high * 0.12;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[10]);
+    return vec4f(color, 1.0);
+}

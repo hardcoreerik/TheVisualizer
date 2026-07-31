@@ -1,0 +1,69 @@
+//! format: 2
+//! id: thevisualizer.spectral-cathedral
+//! name: Spectral Cathedral
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Audio|bass-vault|Bass Vault|0.0|3.0|1.3
+//! parameter: Audio|treble-glass|Treble Glass|0.0|3.0|1.4
+//! parameter: Architecture|aisles|Aisles|3.0|15.0|7.0
+//! parameter: Architecture|arch-height|Arch Height|0.2|1.8|0.9
+//! parameter: Glass|pane-density|Pane Density|2.0|18.0|8.0
+//! parameter: Glass|lead-width|Lead Width|0.002|0.08|0.018
+//! parameter: Light|ray-strength|Ray Strength|0.0|3.0|1.2
+//! parameter: Light|rose-window|Rose Window|0.0|3.0|1.0
+//! parameter: Motion|procession|Procession|-3.0|3.0|0.22
+//! parameter: Camera|perspective|Perspective|0.2|2.5|1.0
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn line(x: f32, w: f32) -> f32 { return 1.0 - smoothstep(w, w * 2.5, abs(x)); }
+
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    uv /= max(scene.values[4], 0.35);
+    uv.x += scene.values[2] * 0.25;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let depth = max(0.08, 1.35 - uv.y);
+    let perspective = controls.values[10] / depth;
+    let aisle = fract((uv.x * perspective + 0.5) * controls.values[3]) - 0.5;
+    let pillars = line(aisle, controls.values[6] * perspective);
+    let arch_y = uv.y + controls.values[4] - abs(aisle) * (1.2 + bass * controls.values[1] * 0.15);
+    let arches = line(fract(arch_y * 2.5 - uniforms.time * controls.values[9]) - 0.5, controls.values[6] * 2.0);
+    let pane = floor((uv + vec2f(0.0, uniforms.time * controls.values[9] * 0.05)) * controls.values[5]);
+    let band = min(u32(abs(pane.x + pane.y * 3.0)) % 64u, 63u);
+    let energy = clamp(features.spectrum[band] * response, 0.0, 1.5);
+    let lead = max(line(fract(uv.x * controls.values[5]) - 0.5, controls.values[6]),
+                   line(fract(uv.y * controls.values[5]) - 0.5, controls.values[6]));
+    let rose_r = length(uv - vec2f(0.0, 0.42));
+    let rose = line(rose_r - 0.24, 0.012) + pow(max(0.0, cos(atan2(uv.y - 0.42, uv.x) * 8.0)), 18.0)
+        * exp(-rose_r * 5.0) * controls.values[8];
+    let rays = pow(max(0.0, 1.0 - abs(uv.x) / max(0.2, uv.y + 1.2)), 3.0)
+        * controls.values[7] * (0.15 + high * controls.values[2]);
+    var color = routed(88u) * (0.25 + depth * 0.08);
+    color += mix(routed(76u), routed(80u), fract(f32(band) * 0.173)) * energy * (1.0 - lead) * 0.75;
+    color += routed(84u) * (pillars + arches) * (0.25 + bass * 0.35);
+    color += routed(72u) * rose * (0.18 + extras.onset);
+    color += mix(routed(72u), routed(84u), 0.5) * rays;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[11] * (0.7 + scene.values[92]));
+    return vec4f(color, 1.0);
+}

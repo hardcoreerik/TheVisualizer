@@ -1,0 +1,67 @@
+//! format: 2
+//! id: thevisualizer.atomic-orbits
+//! name: Atomic Orbits
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Atom|orbit-count|Orbit Count|3.0|12.0|7.0
+//! parameter: Atom|orbit-size|Orbit Size|0.15|0.85|0.48
+//! parameter: Atom|eccentricity|Eccentricity|1.0|4.0|2.3
+//! parameter: Motion|spin|Orbital Spin|-3.0|3.0|0.6
+//! parameter: Motion|precession|Precession|-2.0|2.0|0.25
+//! parameter: Atom|electrons|Electron Glow|0.0|3.0|1.3
+//! parameter: Color|phase|Orbital Phase|-1.0|1.0|0.0
+//! parameter: Surface|trail|Light Trails|0.0|4.0|1.5
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.1
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+fn rotate(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c*p.x-s*p.y, s*p.x+c*p.y); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let count = u32(controls.values[1]);
+    let size = controls.values[2] * (1.0 + uniforms.audio.x * 0.08);
+    var light = 0.0;
+    var electrons = 0.0;
+    var hue = 0.0;
+    for (var orbit = 0u; orbit < 12u; orbit += 1u) {
+        if orbit < count {
+            let f = f32(orbit);
+            let angle = f * 0.61 + uniforms.time * controls.values[5] * (0.25 + f * 0.025)
+                + sin(uniforms.time * 0.3 + f) * controls.values[6] * 0.2;
+            let q = rotate(uv, angle);
+            let ellipse = abs(length(vec2f(q.x, q.y * controls.values[3])) - size * (0.82 + f * 0.025));
+            let orbit_light = glow(ellipse, 0.006 + f * 0.0007);
+            let source = min(u32(f / max(f32(count), 1.0) * 64.0), 63u);
+            let energy = clamp(features.spectrum[source] * controls.values[0] * uniforms.gain, 0.0, 1.5);
+            let electron_angle = uniforms.time * controls.values[4] * (0.8 + f * 0.09) + f * 1.7;
+            let electron = vec2f(cos(electron_angle), sin(electron_angle) / controls.values[3]) * size;
+            electrons += glow(length(q - electron), 0.018 + energy * 0.012) * controls.values[6];
+            light += orbit_light * (0.35 + energy * controls.values[8] * 0.2);
+            hue += orbit_light * f / max(f32(count), 1.0);
+        }
+    }
+    let nucleus = glow(length(uv), 0.055 + uniforms.audio.x * 0.035) * (1.0 + extras.transient * 1.5);
+    var color = routed(88u) * 0.09;
+    color += mix(routed(76u), routed(84u), clamp(hue + controls.values[7] * 0.2, 0.0, 1.0)) * light;
+    color += routed(72u) * electrons + routed(80u) * nucleus;
+    color += routed(84u) * light * light * controls.values[8] * 0.08;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}

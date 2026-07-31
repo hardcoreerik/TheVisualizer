@@ -1,0 +1,64 @@
+//! format: 2
+//! id: thevisualizer.pulse-trace
+//! name: Pulse Trace
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Trace|amplitude|Amplitude|0.1|2.0|0.75
+//! parameter: Trace|layers|Echo Layers|2.0|16.0|9.0
+//! parameter: Trace|width|Line Width|0.3|4.0|1.2
+//! parameter: Motion|drift|Layer Drift|-3.0|3.0|0.35
+//! parameter: Motion|scan-speed|Scan Speed|-4.0|4.0|0.8
+//! parameter: Grid|grid|Signal Grid|0.0|1.0|0.22
+//! parameter: Color|phase|Color Phase|-1.0|1.0|0.0
+//! parameter: Surface|afterglow|Afterglow|0.0|3.0|1.25
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.15
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn line_glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+fn wave(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i] * controls.values[0] * controls.values[1];
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let x = clamp(uv.x / (res.x / res.y) * 0.5 + 0.5, 0.0, 0.999);
+    let width = controls.values[3] / res.y * 2.5;
+    let count = u32(controls.values[2]);
+    var light = 0.0;
+    var hue = 0.0;
+    for (var layer = 0u; layer < 16u; layer += 1u) {
+        if layer < count {
+            let f = f32(layer);
+            let offset = (f - f32(count - 1u) * 0.5) * 0.095;
+            let drift = sin(uv.x * (2.0 + f * 0.17) + uniforms.time * controls.values[4] + f) * 0.025;
+            let delayed = fract(x + f * 0.011 + uniforms.time * controls.values[5] * 0.003);
+            let energy = line_glow(abs(uv.y - offset - wave(delayed) * (1.0 - f * 0.025) - drift), width * (1.0 + f * 0.13));
+            light += energy * (1.0 - f / 20.0);
+            hue += energy * f / max(f32(count), 1.0);
+        }
+    }
+    let grid = (line_glow(abs(fract(x * 12.0) - 0.5), 0.018) + line_glow(abs(fract((uv.y + 1.0) * 6.0) - 0.5), 0.018)) * controls.values[6];
+    let pulse = 0.8 + extras.transient * 0.8 + extras.onset * 0.35;
+    var color = routed(88u) * 0.12 + routed(80u) * grid * 0.06;
+    color += mix(routed(76u), routed(84u), clamp(hue + controls.values[7] * 0.5, 0.0, 1.0)) * light * pulse;
+    color += routed(72u) * light * light * controls.values[8] * 0.18;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}

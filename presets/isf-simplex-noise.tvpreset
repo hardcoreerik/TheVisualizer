@@ -1,0 +1,71 @@
+//! format: 2
+//! id: isf.vidvox.simplex-noise
+//! name: ISF · Fractal Noise
+//! version: 0.1.0
+//! author: VIDVOX, Ashima Arts, Stefan Gustavson; TheVisualizer WGSL and audio adaptation
+//! license: MIT
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Field|scale|Scale|1.0|50.0|8.0
+//! parameter: Field|octaves|Octaves|1.0|6.0|4.0
+//! parameter: Field|persistence|Persistence|0.1|1.0|0.5
+//! parameter: Field|lacunarity|Lacunarity|1.1|4.0|2.0
+//! parameter: Field|speed|Speed|-2.0|2.0|0.18
+//! parameter: Field|contrast|Contrast|0.2|4.0|1.25
+//! parameter: Audio|bass-fold|Bass Fold|0.0|3.0|1.0
+//! parameter: Audio|mid-flow|Mid Flow|0.0|3.0|0.9
+//! parameter: Audio|treble-grain|Treble Grain|0.0|3.0|1.0
+//! parameter: Color|hue-low|Low Hue|0.0|1.0|0.66
+//! parameter: Color|hue-high|High Hue|0.0|1.0|0.04
+//! parameter: Color|saturation|Saturation|0.0|1.5|0.9
+//! parameter: Color|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn noise(p: vec2f) -> f32 {
+    let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x),
+               mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0)), u.x), u.y);
+}
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = fract(vec3f(h) + vec3f(0.0, 0.666667, 0.333333)) * 6.0;
+    return v * mix(vec3f(1.0), clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    var point = uv * controls.values[1];
+    point += vec2f(uniforms.time * controls.values[5], mid * controls.values[8] * 0.25);
+    point += sin(point.yx * 0.7 + uniforms.time) * bass * controls.values[7] * 0.28;
+    var sum = 0.0; var amplitude = 0.5; var norm = 0.0;
+    let octaves = u32(clamp(controls.values[2], 1.0, 6.0));
+    for (var i = 0u; i < 6u; i++) {
+        if (i >= octaves) { break; }
+        sum += noise(point) * amplitude; norm += amplitude;
+        point = mat2x2f(1.7, 1.1, -1.1, 1.7) * point * (controls.values[4] * 0.5);
+        amplitude *= controls.values[3];
+    }
+    var value = pow(clamp(sum / max(norm, 0.001), 0.0, 1.0), controls.values[6]);
+    value += (hash21(p.xy + uniforms.time) - 0.5) * high * controls.values[9] * 0.08;
+    var color = mix(hsv(controls.values[10], controls.values[12], 0.16),
+                    hsv(controls.values[11], controls.values[12], 1.0), clamp(value, 0.0, 1.0));
+    color += vec3f(0.5, 0.7, 1.0) * extras.onset * smoothstep(0.72, 1.0, value) * 0.18;
+    color = 1.0 - exp(-color * controls.values[13]);
+    return vec4f(color, 1.0);
+}

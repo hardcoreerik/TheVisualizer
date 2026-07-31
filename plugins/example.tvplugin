@@ -1,0 +1,9 @@
+format=1
+id=thevisualizer.example-energy
+name=Example Energy Driver
+version=0.1.0
+author=TheVisualizer
+license=Apache-2.0
+abi=1
+platform=windows-x86_64
+library=../target/debug/thevisualizer_example_plugin.dll

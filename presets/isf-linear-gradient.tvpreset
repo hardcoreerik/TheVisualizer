@@ -1,0 +1,62 @@
+//! format: 2
+//! id: isf.carter-rosenberg.linear-gradient
+//! name: ISF · Gradient Engine
+//! version: 0.1.0
+//! author: Carter Rosenberg; TheVisualizer WGSL and audio adaptation
+//! license: MIT
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Gradient|offset|Offset|-2.0|2.0|0.0
+//! parameter: Gradient|frequency|Frequency|0.2|16.0|2.0
+//! parameter: Gradient|curve|Curve|0.0|2.0|1.0
+//! parameter: Gradient|angle|Angle|-3.14|3.14|0.35
+//! parameter: Gradient|speed|Speed|-3.0|3.0|0.16
+//! parameter: Audio|bass-width|Bass Width|0.0|3.0|1.0
+//! parameter: Audio|mid-phase|Mid Phase|0.0|3.0|0.9
+//! parameter: Audio|treble-shimmer|Treble Shimmer|0.0|3.0|0.8
+//! parameter: Color|hue-a|Hue A|0.0|1.0|0.09
+//! parameter: Color|hue-b|Hue B|0.0|1.0|0.62
+//! parameter: Color|saturation|Saturation|0.0|1.5|0.9
+//! parameter: Color|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = fract(vec3f(h) + vec3f(0.0, 0.666667, 0.333333)) * 6.0;
+    return v * mix(vec3f(1.0), clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = p.xy / res;
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
+    let mid = clamp(uniforms.audio.y * response, 0.0, 1.5);
+    let high = clamp(uniforms.audio.z * response, 0.0, 1.5);
+    let axis = vec2f(cos(controls.values[4]), sin(controls.values[4]));
+    var phase = dot(uv - 0.5, axis) * controls.values[2] + controls.values[1]
+        + uniforms.time * controls.values[5] + mid * controls.values[7] * 0.1;
+    phase += sin(dot(uv, vec2f(-axis.y, axis.x)) * 18.0 + uniforms.time) * bass * controls.values[6] * 0.08;
+    let triangle = 1.0 - abs(fract(phase) * 2.0 - 1.0);
+    let sine = 0.5 + 0.5 * sin(phase * 6.283185);
+    let curve = clamp(controls.values[3], 0.0, 2.0);
+    var amount = mix(triangle, sine, min(curve, 1.0));
+    amount = mix(amount, amount * amount, max(curve - 1.0, 0.0));
+    amount += (hash21(p.xy + uniforms.time) - 0.5) * high * controls.values[8] * 0.08;
+    let a = hsv(controls.values[9], controls.values[11], 0.9);
+    let b = hsv(controls.values[10], controls.values[11], 0.9);
+    var color = mix(a, b, clamp(amount, 0.0, 1.0));
+    color = 1.0 - exp(-color * controls.values[12]);
+    return vec4f(color, 1.0);
+}

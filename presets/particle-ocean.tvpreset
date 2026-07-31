@@ -1,0 +1,60 @@
+//! format: 2
+//! id: thevisualizer.particle-ocean
+//! name: Particle Ocean
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Field|density|Particle Density|12.0|64.0|36.0
+//! parameter: Field|wave-height|Wave Height|0.0|2.0|0.8
+//! parameter: Field|flow|Current Flow|-3.0|3.0|0.55
+//! parameter: Camera|depth|Perspective Depth|0.2|2.0|1.0
+//! parameter: Motion|drift|Ocean Drift|-3.0|3.0|0.35
+//! parameter: Surface|connections|Connections|0.0|2.0|0.45
+//! parameter: Color|phase|Depth Phase|-1.0|1.0|0.0
+//! parameter: Surface|sparkle|Sparkle|0.0|3.0|1.1
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    let uv = p.xy / res;
+    let depth = clamp(uv.y, 0.0, 0.999);
+    let perspective = mix(0.35, controls.values[4], depth);
+    let density = controls.values[1];
+    let sx = (uv.x - 0.5) / max(perspective, 0.1) + 0.5;
+    let si = min(u32(clamp(fract(sx), 0.0, 0.999) * 64.0), 63u);
+    let energy = clamp(features.spectrum[si] * controls.values[0] * uniforms.gain, 0.0, 1.4);
+    let flow = uniforms.time * controls.values[5] * 0.2 + sin(depth * 8.0 + uniforms.time * controls.values[3]) * controls.values[2] * 0.22;
+    let grid = vec2f(sx * density + flow, depth * density * 0.55);
+    let cell = floor(grid);
+    var point = fract(grid) - 0.5;
+    point.y += sin((cell.x + uniforms.time * controls.values[3]) * 0.45) * controls.values[2] * 0.12;
+    let seed = hash21(cell);
+    let dot = glow(length(point), 0.075 + energy * 0.05) * step(0.2, seed);
+    let links = (glow(abs(point.x), 0.018) + glow(abs(point.y), 0.018)) * step(0.72, seed) * controls.values[6];
+    let sparkle = pow(max(0.0, sin(seed * 80.0 + uniforms.time * 3.0)), 22.0) * controls.values[8];
+    let phase = clamp(depth + controls.values[7] * 0.2 + energy * 0.15, 0.0, 1.0);
+    var color = routed(88u) * (0.1 + (1.0 - depth) * 0.04);
+    color += mix(routed(76u), routed(84u), phase) * (dot * (0.35 + energy) + links * 0.12);
+    color += routed(72u) * dot * sparkle * (0.3 + extras.transient);
+    color += routed(80u) * glow(abs(uv.y - 0.48 - uniforms.audio.x * 0.08), 0.045) * 0.06;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}

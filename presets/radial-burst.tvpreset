@@ -1,0 +1,60 @@
+//! format: 2
+//! id: thevisualizer.radial-burst
+//! name: Radial Burst
+//! version: 0.1.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.8
+//! parameter: Ring|radius|Core Radius|0.12|0.75|0.34
+//! parameter: Ring|spokes|Spoke Count|16.0|96.0|56.0
+//! parameter: Ring|length|Ray Length|0.1|1.5|0.72
+//! parameter: Motion|rotation|Rotation|-3.0|3.0|0.18
+//! parameter: Motion|wobble|Orbital Wobble|0.0|2.0|0.35
+//! parameter: Surface|core|Core Darkness|0.0|1.0|0.82
+//! parameter: Color|phase|Spectrum Phase|-1.0|1.0|0.0
+//! parameter: Surface|bloom|Bloom|0.0|4.0|1.5
+//! parameter: Surface|exposure|Exposure|0.2|3.0|1.15
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (p.xy * 2.0 - res) / res.y;
+    let radius = length(uv);
+    let angle = atan2(uv.y, uv.x) + uniforms.time * controls.values[4];
+    let phase = fract(angle / 6.2831853 + 0.5 + controls.values[7] * 0.12);
+    let source = min(u32(phase * 64.0), 63u);
+    let energy = clamp(features.spectrum[source] * controls.values[0] * uniforms.gain, 0.0, 1.6);
+    let base = controls.values[1] + sin(angle * 3.0 + uniforms.time) * controls.values[5] * 0.018;
+    let count = controls.values[2];
+    let spoke = pow(max(0.0, cos(angle * count * 0.5)), 22.0);
+    let ray_end = base + 0.04 + energy * controls.values[3] * 0.42;
+    let rays = spoke * step(base, radius) * step(radius, ray_end);
+    let ring = glow(abs(radius - base), 0.007 + energy * 0.005);
+    let outer = glow(abs(radius - ray_end), 0.004) * spoke;
+    let core_mask = 1.0 - smoothstep(base * controls.values[6], base, radius);
+    let dust = pow(max(0.0, sin(angle * count * 2.7 + radius * 170.0 - uniforms.time * 2.0)), 28.0)
+        * step(base, radius) * step(radius, ray_end + 0.16) * (0.2 + energy);
+    var color = routed(88u) * (0.1 + radius * 0.025);
+    color += mix(routed(76u), routed(84u), phase) * (rays * (0.35 + energy) + outer);
+    color += routed(80u) * ring * (0.8 + extras.transient);
+    color += routed(72u) * dust * 0.65;
+    color *= 1.0 - core_mask * controls.values[6];
+    color += routed(84u) * ring * ring * controls.values[8] * 0.12;
+    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    return vec4f(color, 1.0);
+}
