@@ -28,7 +28,7 @@ TheVisualizer now has a Windows desktop prototype with live system-audio loopbac
 - An experimental ten-layer Studio for local images, animated WebP, GPU presets, waveform, and particles, with a bounded media bin, position/mirror/opacity controls, one original photorealistic `Living Photograph`, real foliage motion, and an optional three-region 2.5D foliage rig
 - A persistent Performance Studio with two independently tunable GPU-preset decks, scene search/favorites, a live crossfader, ten transition curves, ten reusable macros, audio envelopes, speed/hue/level controls, freeze, mute, blackout, MIDI mapping, and localhost OSC control
 - Local `.tvpreset` discovery, format-2 grouped parameters, safe live reload, bounded fixed-size waveform/spectrum/scene/control GPU inputs, and last-working-shader retention
-- Backward-compatible native plugin ABIs: the response-only v1 example plus an ABI-v2 Creative Suite with eight selectable profiles, 24 bounded host-owned modulation routes, beat/take events, and eight MIDI/localhost-OSC input lanes
+- Backward-compatible native plugin ABIs: the response-only v1 example plus an ABI-v2 Creative Suite with eighteen selectable profiles (including Analog Fractal Pilot), 24 bounded host-owned modulation routes, beat/take events, and eight MIDI/localhost-OSC input lanes
 - Named Scope, Particles, and Preset controls plus keyboard navigation in a compact overlay, with source-aware quiet-state guidance and technical diagnostics/native extensions behind a discoverable details disclosure
 - A repository-owned waveform mark embedded as the native application/window icon
 - Display-synchronized, 60 FPS, and 30 FPS pacing choices with measured application cadence
@@ -57,8 +57,8 @@ This is not a signed public release. See [Windows Packaging](docs/PACKAGING.md).
 
 ## Remaining v0.1 work
 
-- Land the development branch into protected `main` (public `main` is still an empty initialize commit)
-- Expanded portable package smoke and clean-machine validation
+- Fresh-extract live capture/visual acceptance and clean-machine package validation
+- Keep follow-up work on reviewed branches (public `main` restored via PR #1)
 - Device-loss, mixed-DPI, multi-monitor, and broader GPU validation
 - Externally measured playback-to-display latency
 - Public-release validation

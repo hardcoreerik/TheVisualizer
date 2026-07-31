@@ -561,14 +561,14 @@ mod tests {
     fn bundled_plugins_discover_both_abi_generations() {
         let discovery = discover(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/plugins")));
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
-        assert_eq!(discovery.packages.len(), 9);
+        assert_eq!(discovery.packages.len(), 19);
         assert_eq!(
             discovery
                 .packages
                 .iter()
                 .filter(|package| package.abi == ABI_VERSION_V2)
                 .count(),
-            8
+            18
         );
         for package in discovery.packages {
             let plugin = LoadedPlugin::load(&package).expect("load bundled plugin");

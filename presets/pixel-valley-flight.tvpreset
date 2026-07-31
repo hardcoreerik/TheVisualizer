@@ -1,0 +1,475 @@
+//! format: 2
+//! id: thevisualizer.pixel-valley-flight
+//! name: Hyperreal Valley Flight
+//! version: 1.0.0
+//! author: TheVisualizer
+//! license: Apache-2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.7
+//! parameter: Flight|speed|Flight Speed|0.2|3.0|1.05
+//! parameter: Flight|phrase-width|Phrase Width|0.4|1.8|1.05
+//! parameter: Flight|bank|Bank Amount|0.0|1.5|0.75
+//! parameter: Flight|chase-distance|Chase Distance|0.6|1.8|1.05
+//! parameter: Valley|depth|Valley Depth|0.6|2.2|1.15
+//! parameter: Valley|width|Valley Width|0.7|2.2|1.2
+//! parameter: Valley|ruggedness|Ruggedness|0.2|2.0|1.1
+//! parameter: World|forest|Forest Density|0.0|2.0|1.0
+//! parameter: Traffic|density|Air Traffic|0.0|1.5|0.55
+//! parameter: Traffic|ufo-chance|UFO Chance|0.0|1.5|0.35
+//! parameter: Plane|plane-size|Hero Plane Size|0.9|2.2|1.35
+//! parameter: Look|atmosphere|Atmosphere|0.5|2.0|1.25
+//! parameter: Look|fog|Distance Haze|0.3|2.0|1.05
+//! parameter: Look|sun|Sun Strength|0.4|2.0|1.2
+//! parameter: Look|exposure|Exposure|0.5|2.2|1.05
+//! ---
+struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
+@group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
+struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
+@group(0) @binding(1) var<storage, read> features: AudioFeatures;
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+@group(0) @binding(2) var<uniform> extras: FrameExtras;
+struct SceneState { values: array<f32, 96> }
+@group(0) @binding(3) var<storage, read> scene: SceneState;
+struct ModeParameters { values: array<f32, 40> }
+@group(0) @binding(4) var<storage, read> controls: ModeParameters;
+@group(0) @binding(6) var terrain_tex: texture_2d_array<f32>;
+@group(0) @binding(7) var terrain_samp: sampler;
+
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
+    return vec4f(v[i], 0.0, 1.0);
+}
+
+fn hash21(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453123);
+}
+
+fn noise2(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x),
+        mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), u.x),
+        u.y
+    );
+}
+
+fn fbm(p: vec2f) -> f32 {
+    var v = 0.0;
+    var a = 0.5;
+    var x = p;
+    for (var i = 0; i < 6; i += 1) {
+        v += a * noise2(x);
+        x = x * 2.02 + vec2f(11.5, 7.3);
+        a *= 0.5;
+    }
+    return v;
+}
+
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.6);
+}
+
+fn rotate2(p: vec2f, a: f32) -> vec2f {
+    let c = cos(a);
+    let s = sin(a);
+    return vec2f(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+fn tonemap(x: vec3f) -> vec3f {
+    // Filmic curve tuned for outdoor daylight
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    let y = max(x, vec3f(0.0));
+    return pow(clamp((y * (a * y + b)) / (y * (c * y + d) + e), vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2));
+}
+
+fn sample_tex(uv: vec2f, layer: i32, lod: f32) -> vec3f {
+    return textureSampleLevel(terrain_tex, terrain_samp, fract(uv), layer, lod).rgb;
+}
+
+// Continuous valley height — smooth bowls + ridged hills, no blocky terraces.
+fn height_field(p: vec2f) -> f32 {
+    let width = max(controls.values[6], 0.55);
+    let rugged = controls.values[7];
+    let x = p.x;
+    let z = p.y;
+    // Soft canyon walls
+    let wall = pow(abs(x) / width, 1.35) * controls.values[5] * 0.55;
+    // Large rolling terrain
+    let h1 = fbm(vec2f(x * 0.22, z * 0.11)) * 0.55 * rugged;
+    let h2 = fbm(vec2f(x * 0.7 + 5.0, z * 0.35)) * 0.18 * rugged;
+    // Ridges along walls
+    let ridge = abs(fbm(vec2f(x * 1.1, z * 0.4)) - 0.5) * 0.22 * rugged * smoothstep(0.15, 0.7, abs(x) / width);
+    // River cut
+    let river = -exp(-pow(x / (0.18 * width), 2.0)) * 0.09;
+    // Gentle audio modulation (very soft)
+    let audio = band(min(u32(fract(z * 0.02) * 16.0), 15u)) * 0.03 * rugged;
+    return wall + h1 + h2 + ridge + river + audio;
+}
+
+fn normal_at(p: vec2f) -> vec3f {
+    let e = 0.04;
+    let h = height_field(p);
+    let hx = height_field(p + vec2f(e, 0.0)) - h;
+    let hz = height_field(p + vec2f(0.0, e)) - h;
+    return normalize(vec3f(-hx, e * 1.15, -hz));
+}
+
+fn triplanar_albedo(world: vec3f, n: vec3f, lod: f32) -> vec3f {
+    let scale = 0.45;
+    let xp = sample_tex(world.zy * scale, 1, lod); // rock-ish on X slopes
+    let yp = sample_tex(world.xz * scale, 0, lod); // grass on tops
+    let zp = sample_tex(world.xy * scale * 0.85, 2, lod);
+    let w = abs(n);
+    let sum = w.x + w.y + w.z + 1e-4;
+    var col = (xp * w.x + yp * w.y + zp * w.z) / sum;
+    // Macro tint
+    let macro_tint = sample_tex(world.xz * 0.08, 3, lod + 1.5);
+    col = mix(col, col * (0.65 + macro_tint * 0.7), 0.45);
+    // Height material: more rock high, wetter low
+    let h = world.y;
+    col = mix(col * vec3f(0.75, 0.85, 0.95), col, smoothstep(-0.05, 0.12, h));
+    col = mix(col, sample_tex(world.xz * 0.35, 1, lod) * 0.9, smoothstep(0.18, 0.45, h) * 0.55);
+    // River wet
+    let wet = exp(-pow(world.x / 0.14, 2.0));
+    col = mix(col, col * vec3f(0.35, 0.45, 0.55) + vec3f(0.05, 0.08, 0.1), wet * 0.75);
+    return col;
+}
+
+// Realistic atmospheric sky
+fn atmosphere(rd: vec3f, sun: vec3f, strength: f32) -> vec3f {
+    let y = clamp(rd.y * 0.85 + 0.15, 0.0, 1.0);
+    // Rayleigh-ish blues
+    let zenith = vec3f(0.15, 0.35, 0.72) * strength;
+    let horizon = vec3f(0.62, 0.72, 0.85) * strength;
+    var sky = mix(horizon, zenith, pow(y, 0.65));
+    // Warm horizon band
+    sky = mix(sky, vec3f(0.85, 0.78, 0.7) * strength, exp(-abs(rd.y - 0.02) * 12.0) * 0.35);
+    // Sun disc + bloom
+    let mu = max(dot(rd, sun), 0.0);
+    sky += vec3f(1.0, 0.95, 0.85) * pow(mu, 256.0) * 2.2 * controls.values[14];
+    sky += vec3f(1.0, 0.8, 0.55) * pow(mu, 16.0) * 0.45 * controls.values[14];
+    sky += vec3f(1.0, 0.7, 0.4) * pow(mu, 4.0) * 0.12 * controls.values[14];
+    // Soft cirrus
+    let c = fbm(vec2f(rd.x * 2.5 + uniforms.time * 0.01, rd.y * 3.5 + rd.z * 0.5));
+    let cirrus = smoothstep(0.55, 0.78, c) * smoothstep(0.05, 0.45, rd.y);
+    sky = mix(sky, vec3f(0.95, 0.96, 0.98), cirrus * 0.4);
+    return sky;
+}
+
+// Dense distant forest as 3D height shell (not billboards).
+fn forest_height(p: vec2f) -> f32 {
+    let base = height_field(p);
+    let dens = controls.values[8];
+    if dens < 0.05 {
+        return base;
+    }
+    let n = fbm(p * 2.8);
+    let canopy = smoothstep(0.35, 0.75, n) * dens * 0.07;
+    // Prefer slopes / sides
+    let side = smoothstep(0.12, 0.55, abs(p.x) / max(controls.values[6], 0.5));
+    return base + canopy * side;
+}
+
+// Hero plane: convincing rear 3/4 chase silhouette with metal shading.
+fn hero_plane(p: vec2f, bank: f32, size: f32, sun: vec3f) -> vec4f {
+    let q0 = rotate2(p, bank) / max(size, 0.35);
+    // Perspective squash — top of craft (nose away) is smaller
+    let depth_squash = 1.0 + max(-q0.y, 0.0) * 0.35;
+    let q = vec2f(q0.x * depth_squash, q0.y);
+
+    // Fuselage from rear: wide near bottom (tail), tapering upward (into distance)
+    let body_w = 0.13 + max(-q.y, 0.0) * 0.04 + max(q.y, 0.0) * 0.02;
+    let body = length(vec2f(q.x / body_w, (q.y - 0.02) / 0.38)) - 1.0;
+    // Main wings
+    let wing = length(vec2f(q.x / 0.78, (q.y + 0.04) / 0.09)) - 1.0;
+    // Tips
+    let tip = min(
+        length(vec2f((q.x + 0.62) / 0.12, (q.y - 0.02) / 0.04)) - 1.0,
+        length(vec2f((q.x - 0.62) / 0.12, (q.y - 0.02) / 0.04)) - 1.0
+    );
+    // Twin vertical stabs (rear)
+    let fin_l = abs(q.x + 0.1) / 0.025 + abs(q.y + 0.2) / 0.18 - 1.0;
+    let fin_r = abs(q.x - 0.1) / 0.025 + abs(q.y + 0.2) / 0.18 - 1.0;
+    // Horizontal stab
+    let hstab = length(vec2f(q.x / 0.32, (q.y + 0.26) / 0.045)) - 1.0;
+    // Twin engines facing camera
+    let e1 = length(q - vec2f(-0.11, -0.3)) - 0.085;
+    let e2 = length(q - vec2f(0.11, -0.3)) - 0.085;
+
+    var d = min(body, wing);
+    d = min(d, tip);
+    d = min(d, min(fin_l, fin_r));
+    d = min(d, hstab);
+    d = min(d, min(e1, e2));
+
+    let fill = smoothstep(0.018, -0.01, d);
+    if fill < 0.01 {
+        return vec4f(0.0);
+    }
+
+    // Fake normal from SDF gradient
+    let e = 0.004;
+    let nx = (min(length(vec2f((q.x + e) / body_w, (q.y - 0.02) / 0.38)) - 1.0, wing) - d) / e;
+    let ny = (min(length(vec2f(q.x / body_w, (q.y - 0.02 + e) / 0.38)) - 1.0, wing) - d) / e;
+    let n = normalize(vec3f(-nx, -ny, 0.65));
+    let l = normalize(vec3f(0.35, 0.7, 0.4));
+    let ndl = clamp(dot(n, l), 0.0, 1.0);
+    let halfv = normalize(l + vec3f(0.0, 0.2, 1.0));
+    let spec = pow(clamp(dot(n, halfv), 0.0, 1.0), 64.0);
+
+    var base = vec3f(0.48, 0.5, 0.54);
+    // Panel variation
+    base *= 0.9 + 0.1 * noise2(q * 18.0);
+    // Spine stripe
+    if abs(q.x) < 0.035 && q.y > -0.2 && q.y < 0.32 {
+        base = mix(base, vec3f(0.55, 0.08, 0.08), 0.85);
+    }
+    // Heat-stained engine fairings
+    let eng = smoothstep(0.12, 0.0, min(length(q - vec2f(-0.11, -0.3)), length(q - vec2f(0.11, -0.3))));
+    base = mix(base, vec3f(0.25, 0.26, 0.28), eng * 0.6);
+
+    var col = base * (0.22 + 0.85 * ndl) + vec3f(1.0, 0.96, 0.9) * spec * 0.35;
+    // Engine glow (steady, not beat-spiky)
+    let glow = exp(-length(q - vec2f(-0.11, -0.38)) * 22.0)
+        + exp(-length(q - vec2f(0.11, -0.38)) * 22.0);
+    col += vec3f(1.0, 0.55, 0.2) * glow * (0.4 + uniforms.audio.x * 0.35 + uniforms.audio.w * 0.2);
+    // Rim light
+    col += vec3f(0.4, 0.55, 0.75) * pow(1.0 - abs(n.z), 3.0) * 0.2;
+
+    return vec4f(col, fill);
+}
+
+// Soft distant air traffic (very subtle, high altitude).
+fn air_traffic(uv: vec2f, t: f32, dens: f32) -> vec3f {
+    if dens < 0.05 {
+        return vec3f(0.0);
+    }
+    var c = vec3f(0.0);
+    for (var i = 0; i < 5; i += 1) {
+        let fi = f32(i);
+        let seed = hash21(vec2f(fi * 4.1, 2.2));
+        let y = 0.28 + seed * 0.35;
+        let dir = select(-1.0, 1.0, seed > 0.5);
+        let x = fract(seed + t * 0.015 * dens * dir) * 2.6 - 1.3;
+        let p = uv - vec2f(x, y);
+        // Tiny jet + contrail
+        let body = exp(-length(p * vec2f(3.0, 14.0)) * 80.0);
+        let trail = exp(-abs(p.y) * 120.0) * smoothstep(0.0, 0.9, -p.x * dir) * exp(-abs(p.x) * 0.9);
+        c += vec3f(0.85, 0.88, 0.92) * body * dens * 0.7;
+        c += vec3f(0.9, 0.93, 0.97) * trail * dens * 0.18;
+    }
+    return c;
+}
+
+@fragment fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+    let res = max(uniforms.resolution, vec2f(1.0));
+    var uv = (frag.xy * 2.0 - res) / res.y;
+    uv.y = -uv.y;
+
+    let response = controls.values[0];
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.4);
+    let mids = clamp(uniforms.audio.y * response, 0.0, 1.4);
+    let rms = clamp(uniforms.audio.w * response, 0.0, 1.4);
+    let t = uniforms.time;
+
+    // Host adaptive phrase: 16=side, 17=count, 18=beat pulse, 19=phase.
+    // Counts 1–4 hold left, 5–8 hold right; pulse drives light flight accents.
+    let phrase_side = controls.values[16];
+    let beat_pulse = controls.values[18];
+    let beat_phase = controls.values[19];
+    let phrase_width = controls.values[2];
+    let chase = controls.values[4];
+
+    let flight = t * controls.values[1] * (0.5 + rms * 0.28 + bass * 0.1);
+    // Primary path: phrase side. Micro breathe on the beat (not a path jump).
+    let sway = phrase_side * 0.48 * phrase_width
+        + sin(beat_phase * 6.2831853) * 0.014 * beat_pulse;
+    let bank = (-phrase_side * 0.45 - sway * 0.7) * controls.values[3]
+        - phrase_side * beat_pulse * 0.1 * controls.values[3];
+    let lift = beat_pulse * 0.016;
+
+    // World path
+    let path_x = sway * 0.5;
+    let path_z = flight;
+    let ground_h = height_field(vec2f(path_x, path_z)) * 0.35;
+    let plane_y = ground_h + 0.28 + controls.values[4] * 0.02 + mids * 0.01 + lift;
+
+    // Camera: true rear chase
+    let cam_pos = vec3f(
+        path_x - sway * 0.05,
+        plane_y + 0.14 + chase * 0.06,
+        path_z - 0.75 * chase - 0.15
+    );
+    let cam_target = vec3f(path_x + sway * 0.1, plane_y + 0.02, path_z + 1.4);
+    let forward = normalize(cam_target - cam_pos);
+    let right = normalize(cross(forward, vec3f(0.0, 1.0, 0.0)));
+    let up = cross(right, forward);
+    // Slight bank on camera
+    let bank_c = bank * 0.35;
+    let right_b = right * cos(bank_c) + up * sin(bank_c);
+    let up_b = -right * sin(bank_c) + up * cos(bank_c);
+
+    let fov = 1.05;
+    let rd = normalize(forward + right_b * uv.x * fov + up_b * uv.y * fov * 0.92);
+    let sun = normalize(vec3f(0.35, 0.72, 0.28));
+
+    // Sky
+    var color = atmosphere(rd, sun, controls.values[12]);
+
+    // Horizon mountains (smooth silhouettes)
+    for (var m = 0; m < 4; m += 1) {
+        let fm = f32(m);
+        let mz = 18.0 + fm * 7.0;
+        let domain = uv.x * (1.3 + fm * 0.2) + path_x * 0.05;
+        let mh = 0.12 + 0.18 * fbm(vec2f(domain * 1.3 + fm * 3.0, fm * 2.0));
+        let sil_y = -0.05 + mh * (0.9 - fm * 0.12);
+        if uv.y < sil_y && rd.y < 0.15 {
+            let fog = exp(-fm * 0.35) * 0.55;
+            let col = mix(vec3f(0.45, 0.5, 0.58), vec3f(0.55, 0.52, 0.5), fm * 0.15);
+            let snow = smoothstep(sil_y - 0.04, sil_y, uv.y);
+            color = mix(color, mix(col, vec3f(0.88, 0.9, 0.93), snow * 0.5), fog * 0.65);
+        }
+    }
+
+    // Ray-march terrain (heightfield) with refine
+    var hit = false;
+    var hit_p = vec3f(0.0);
+    var hit_t = 0.0;
+    var t_ray = 0.4;
+    for (var i = 0; i < 96; i += 1) {
+        let p = cam_pos + rd * t_ray;
+        let h = height_field(p.xz) * 0.35;
+        let d = p.y - h;
+        if d < 0.012 * t_ray {
+            // Binary refine
+            var a = t_ray - 0.15;
+            var b = t_ray;
+            for (var k = 0; k < 6; k += 1) {
+                let m = 0.5 * (a + b);
+                let pm = cam_pos + rd * m;
+                if pm.y < height_field(pm.xz) * 0.35 {
+                    b = m;
+                } else {
+                    a = m;
+                }
+            }
+            hit_t = b;
+            hit_p = cam_pos + rd * hit_t;
+            hit = true;
+            break;
+        }
+        // Forest canopy shell near mid distance
+        let fh = forest_height(p.xz) * 0.35;
+        if p.y < fh && p.y > h {
+            // Soft forest color without hard billboards
+            let n = normal_at(p.xz);
+            let lod = clamp(log2(t_ray * 1.8), 0.0, 5.0);
+            var fcol = sample_tex(p.xz * 1.2, 0, lod) * vec3f(0.35, 0.55, 0.28);
+            fcol *= 0.35 + 0.65 * clamp(dot(n, sun), 0.0, 1.0);
+            let fog = exp(-hit_t * controls.values[13] * 0.22);
+            // Don't hard-stop; continue but accumulate if we didn't hit ground yet
+        }
+        t_ray += max(0.04, abs(d) * 0.55);
+        if t_ray > 45.0 {
+            break;
+        }
+    }
+
+    if hit {
+        let n = normal_at(hit_p.xz);
+        let lod = clamp(log2(hit_t * 1.6), 0.0, 6.0);
+        var albedo = triplanar_albedo(hit_p, n, lod);
+        // Detail boost near camera
+        let near = smoothstep(8.0, 1.2, hit_t);
+        if near > 0.05 {
+            let det = sample_tex(hit_p.xz * 2.8, 0, 0.0);
+            albedo = mix(albedo, albedo * (0.7 + det * 0.6), near * 0.4);
+        }
+        let ndl = clamp(dot(n, sun), 0.0, 1.0);
+        // Soft shadow march toward sun
+        var shadow = 1.0;
+        var st = 0.08;
+        for (var s = 0; s < 24; s += 1) {
+            let sp = hit_p + sun * st;
+            let d = sp.y - height_field(sp.xz) * 0.35;
+            shadow = min(shadow, 8.0 * d / st);
+            st += max(0.06, abs(d) * 0.5);
+            if st > 12.0 || shadow < 0.02 {
+                break;
+            }
+        }
+        shadow = clamp(shadow, 0.15, 1.0);
+
+        let hemi = 0.28 + 0.72 * max(n.y, 0.0);
+        let amb = vec3f(0.28, 0.36, 0.48) * hemi * controls.values[12];
+        let sun_col = vec3f(1.0, 0.94, 0.82) * ndl * shadow * controls.values[14];
+        // Specular water / wet rock
+        let r = reflect(-sun, n);
+        let spec = pow(clamp(dot(r, -rd), 0.0, 1.0), 48.0)
+            * (0.04 + exp(-pow(hit_p.x / 0.12, 2.0)) * 0.45) * shadow;
+        var g = albedo * (amb + sun_col) + vec3f(1.0, 0.97, 0.9) * spec * controls.values[14];
+        // AO-ish in valley bottom
+        g *= 0.75 + 0.25 * smoothstep(0.0, 0.35, abs(hit_p.x));
+        // Atmospheric haze
+        let fog_amt = 1.0 - exp(-hit_t * controls.values[13] * 0.085);
+        let fog_col = atmosphere(vec3f(rd.x, max(rd.y, 0.0), rd.z), sun, controls.values[12]);
+        color = mix(g, fog_col, fog_amt);
+    }
+
+    // Subtle high-altitude traffic
+    color += air_traffic(uv, t + flight, controls.values[9]);
+
+    // Rare UFO: distant disc with soft light (not cartoon)
+    if controls.values[10] > 0.05 {
+        let ufo_phase = fract(t * 0.03 + 0.2);
+        if ufo_phase > 0.92 - controls.values[10] * 0.04 {
+            let ufo = vec2f(sin(t * 0.2) * 0.55, 0.42 + cos(t * 0.17) * 0.05);
+            let d = length((uv - ufo) * vec2f(1.0, 1.6));
+            let disc = exp(-d * d * 90.0);
+            let rim = exp(-pow(abs(d - 0.04) * 40.0, 2.0));
+            color += vec3f(0.55, 0.75, 0.7) * disc * 0.35;
+            color += vec3f(0.4, 1.0, 0.85) * rim * 0.25 * (0.5 + 0.5 * sin(t * 5.0));
+        }
+    }
+
+    // Hero plane in rear chase (screen-space, large)
+    let plane_uv = vec2f(sway * 0.12, -0.32 + sin(t * 0.85) * 0.003 + beat_pulse * 0.006);
+    let local = uv - plane_uv;
+    let hero = hero_plane(local, bank, controls.values[11], sun);
+    if hero.a > 0.02 {
+        // Soft contact shadow
+        let sh = exp(-length((local + vec2f(0.0, 0.1)) * vec2f(0.85, 1.8)) * 7.0) * 0.4;
+        color *= 1.0 - sh * hero.a;
+        color = mix(color, hero.rgb, clamp(hero.a, 0.0, 1.0));
+        // Engine plume: steady base + soft beat accent (musical, not jerky)
+        let plume = exp(-length(local - vec2f(0.0, -0.16)) * 11.0)
+            * (0.18 + bass * 0.12 + rms * 0.1 + beat_pulse * 0.28);
+        color += vec3f(1.0, 0.5, 0.2) * plume;
+        // Wingtip glint on the count
+        let glint = exp(-abs(local.y + 0.02) * 50.0)
+            * smoothstep(0.2, 0.55, abs(local.x))
+            * beat_pulse * 0.12;
+        color += vec3f(0.85, 0.92, 1.0) * glint;
+    }
+
+    // Exposure + filmic
+    color *= controls.values[15];
+    // Mild contrast
+    color = (color - 0.5) * 1.06 + 0.5;
+    color = tonemap(max(color, vec3f(0.0)));
+    // Vignette
+    let vig = 1.0 - smoothstep(0.95, 1.75, length(uv * vec2f(0.55, 1.0))) * 0.32;
+    color *= vig;
+
+    return vec4f(clamp(color, vec3f(0.0), vec3f(1.0)), 1.0);
+}

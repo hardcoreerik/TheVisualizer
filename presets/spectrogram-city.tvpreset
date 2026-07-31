@@ -1,19 +1,21 @@
 //! format: 2
 //! id: thevisualizer.spectrogram-city
 //! name: Spectrogram City
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: History|depth|History Depth|0.2|1.0|1.0
-//! parameter: City|relief|City Relief|0.1|1.5|0.7
-//! parameter: City|density|Block Density|8.0|48.0|30.0
-//! parameter: Camera|perspective|Perspective|0.0|1.5|0.72
-//! parameter: Motion|scroll|History Scroll|-2.0|2.0|0.0
-//! parameter: Surface|contours|Heat Contours|0.0|2.0|0.9
-//! parameter: Color|phase|Thermal Phase|-1.0|1.0|0.0
-//! parameter: Surface|fog|Depth Fog|0.0|2.0|0.75
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.1
+//! parameter: Audio|response|Response|0.4|5.0|1.85
+//! parameter: History|depth|History Depth|0.3|1.0|1.0
+//! parameter: City|height|Column Height|0.3|2.0|1.15
+//! parameter: City|density|Column Density|16.0|96.0|64.0
+//! parameter: Color|contrast|Thermal Contrast|0.5|3.0|1.45
+//! parameter: Color|phase|Palette Phase|-1.0|1.0|0.0
+//! parameter: Surface|scanlines|Scan Texture|0.0|2.0|1.1
+//! parameter: Surface|glow|Base Glow|0.0|2.0|0.95
+//! parameter: Surface|fog|Top Fade|0.0|2.0|0.65
+//! parameter: Surface|exposure|Exposure|0.3|3.0|1.2
+//! parameter: Motion|scroll|Scroll Bias|-1.0|1.0|0.0
+//! parameter: City|gap|Street Gaps|0.0|0.4|0.08
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
@@ -25,39 +27,82 @@ struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;
 struct ModeParameters { values: array<f32, 40> }
 @group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
 struct SpectrumHistory { values: array<f32, 8192> }
 @group(0) @binding(5) var<storage, read> history: SpectrumHistory;
+
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-fn heat(v: f32, phase: f32) -> vec3f {
-    let x = clamp(v + phase * 0.12, 0.0, 1.0);
-    return mix(mix(routed(88u), routed(76u), smoothstep(0.0, 0.45, x)), mix(routed(80u), routed(84u), smoothstep(0.5, 1.0, x)), smoothstep(0.3, 0.8, x));
+
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 1e-6)); }
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn tonemap(c: vec3f, e: f32) -> vec3f { return 1.0 - exp(-max(c, vec3f(0.0)) * e); }
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.8);
+}
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+fn hist(row: u32, col: u32) -> f32 {
+    let r = min(row, 127u);
+    let c = min(col, 63u);
+    return history.values[r * 64u + c];
+}
+
+fn thermal(v: f32) -> vec3f {
+    let x = clamp(v * controls.values[4] + controls.values[5] * 0.1, 0.0, 1.0);
+    // red -> orange -> yellow -> green -> cyan -> blue -> purple (matches reference bottom-up)
+    let c0 = vec3f(0.4, 0.0, 0.0);
+    let c1 = vec3f(1.0, 0.05, 0.0);
+    let c2 = vec3f(1.0, 0.85, 0.0);
+    let c3 = vec3f(0.15, 1.0, 0.2);
+    let c4 = vec3f(0.0, 0.75, 1.0);
+    let c5 = vec3f(0.15, 0.1, 1.0);
+    let c6 = vec3f(0.55, 0.0, 0.9);
+    let t = x * 6.0;
+    let i = min(u32(floor(t)), 5u);
+    let f = fract(t);
+    let cols = array(c0, c1, c2, c3, c4, c5, c6);
+    return mix(cols[i], cols[i + 1u], f);
 }
 @fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let res = max(uniforms.resolution, vec2f(1.0));
     let uv = p.xy / res;
-    let depth = clamp((uv.y - 0.08) / 0.9, 0.0, 0.999);
-    let perspective = controls.values[4];
-    let spread = mix(0.42, 1.0, depth);
-    let sx = clamp((uv.x - 0.5) / spread + 0.5, 0.0, 0.999);
-    let scroll = fract(depth * controls.values[1] + uniforms.time * controls.values[5] * 0.015);
-    let rows = max(u32(extras.history_rows), 1u);
-    let row = min(u32(scroll * f32(rows)), rows - 1u);
-    let band = min(u32(sx * 64.0), 63u);
-    let energy = clamp(history.values[row * 64u + band] * uniforms.gain * controls.values[0], 0.0, 1.4);
-    let blocks = step(0.12, fract(sx * controls.values[3])) * step(fract(sx * controls.values[3]), 0.88);
-    let ground_y = 0.94 - depth * 0.68 * perspective;
-    let relief = energy * controls.values[2] * (0.05 + depth * 0.13);
-    let tower = blocks * step(ground_y - relief, uv.y) * step(uv.y, ground_y);
-    let contours = pow(max(0.0, sin(energy * 32.0 - depth * 22.0)), 12.0) * controls.values[6];
-    let grid = pow(max(0.0, sin(depth * 85.0)), 24.0) * 0.25;
-    let fog = depth * controls.values[8];
-    var color = heat(energy, controls.values[7]) * (tower * (0.45 + energy) + contours * 0.22 + grid);
-    color += routed(72u) * tower * extras.transient * 0.25;
-    color = mix(color, routed(88u) * 0.18, clamp(fog * 0.35, 0.0, 0.8));
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    let cols = controls.values[3];
+    let cell = floor(uv.x * cols);
+    let local = fract(uv.x * cols);
+    let gap = controls.values[11];
+    let in_col = step(gap, local) * step(local, 1.0 - gap);
+    let band_i = min(u32((cell + 0.5) / cols * 64.0), 63u);
+    // Map vertical position into history (bottom = newest / hottest in classic waterfall city)
+    let rows = u32(clamp(extras.history_rows, 1.0, 128.0) * controls.values[1]);
+    let y_from_bottom = 1.0 - uv.y;
+    let row = min(u32(y_from_bottom * f32(rows) + controls.values[10] * 8.0), 127u);
+    let e = clamp(hist(row, band_i) * controls.values[0] * uniforms.gain, 0.0, 1.6);
+    let live = band(band_i);
+    let height = (0.08 + max(e, live * 0.65) * controls.values[2] * 0.75);
+    let column = in_col * step(uv.y, height);
+    // Horizontal striation texture
+    let scan = 0.65 + 0.35 * sin(uv.y * res.y * 0.55 + cell) * controls.values[6];
+    let grain = 0.85 + 0.15 * hash21(vec2f(cell, floor(uv.y * 180.0)));
+    var level = e * (0.55 + live * 0.45) * scan * grain;
+    level *= mix(0.4, 1.0, 1.0 - uv.y); // hotter near base like reference
+    var color = thermal(level) * column;
+    color += thermal(level * 1.2) * column * column * controls.values[7] * 0.35;
+    // Soft edges of towers
+    color += thermal(live) * in_col * glow(abs(uv.y - height), 0.008) * 0.4;
+    // Base red line
+    color += vec3f(1.0, 0.15, 0.0) * glow(uv.y, 0.02) * controls.values[7] * 0.5;
+    // Top fade to black
+    color *= 1.0 - smoothstep(0.55, 1.0, uv.y) * controls.values[8];
+    color = tonemap(color, controls.values[9]);
     return vec4f(color, 1.0);
 }

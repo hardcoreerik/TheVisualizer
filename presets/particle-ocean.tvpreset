@@ -1,60 +1,92 @@
 //! format: 2
 //! id: thevisualizer.particle-ocean
 //! name: Particle Ocean
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: Field|density|Particle Density|12.0|64.0|36.0
-//! parameter: Field|wave-height|Wave Height|0.0|2.0|0.8
-//! parameter: Field|flow|Current Flow|-3.0|3.0|0.55
-//! parameter: Camera|depth|Perspective Depth|0.2|2.0|1.0
-//! parameter: Motion|drift|Ocean Drift|-3.0|3.0|0.35
-//! parameter: Surface|connections|Connections|0.0|2.0|0.45
-//! parameter: Color|phase|Depth Phase|-1.0|1.0|0.0
-//! parameter: Surface|sparkle|Sparkle|0.0|3.0|1.1
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.0
+//! parameter: Audio|response|Response|0.4|5.0|1.95
+//! parameter: Field|density|Particle Density|0.3|2.0|1.2
+//! parameter: Field|height|Wave Height|0.2|2.0|1.1
+//! parameter: Field|swirl|Swirl|0.0|3.0|1.25
+//! parameter: Field|fountain|Fountain|0.0|3.0|1.4
+//! parameter: Motion|flow|Flow Speed|-2.0|2.0|0.55
+//! parameter: Surface|size|Particle Size|0.3|3.0|1.15
+//! parameter: Color|violet|Violet Mix|0.0|1.0|0.55
+//! parameter: Surface|links|Trail Links|0.0|2.0|0.85
+//! parameter: Surface|spark|Core Spark|0.0|3.0|1.3
+//! parameter: Surface|exposure|Exposure|0.3|3.0|1.3
+//! parameter: Surface|fog|Depth Fade|0.0|2.0|0.7
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
 struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
 @group(0) @binding(1) var<storage, read> features: AudioFeatures;
-struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32, history_rows: f32, history_bands: f32 }
 @group(0) @binding(2) var<uniform> extras: FrameExtras;
 struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;
 struct ModeParameters { values: array<f32, 40> }
 @group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
+
 fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
-fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 1e-6)); }
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn tonemap(c: vec3f, e: f32) -> vec3f { return 1.0 - exp(-max(c, vec3f(0.0)) * e); }
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.8);
+}
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+
 @fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let res = max(uniforms.resolution, vec2f(1.0));
-    let uv = p.xy / res;
-    let depth = clamp(uv.y, 0.0, 0.999);
-    let perspective = mix(0.35, controls.values[4], depth);
-    let density = controls.values[1];
-    let sx = (uv.x - 0.5) / max(perspective, 0.1) + 0.5;
-    let si = min(u32(clamp(fract(sx), 0.0, 0.999) * 64.0), 63u);
-    let energy = clamp(features.spectrum[si] * controls.values[0] * uniforms.gain, 0.0, 1.4);
-    let flow = uniforms.time * controls.values[5] * 0.2 + sin(depth * 8.0 + uniforms.time * controls.values[3]) * controls.values[2] * 0.22;
-    let grid = vec2f(sx * density + flow, depth * density * 0.55);
-    let cell = floor(grid);
-    var point = fract(grid) - 0.5;
-    point.y += sin((cell.x + uniforms.time * controls.values[3]) * 0.45) * controls.values[2] * 0.12;
-    let seed = hash21(cell);
-    let dot = glow(length(point), 0.075 + energy * 0.05) * step(0.2, seed);
-    let links = (glow(abs(point.x), 0.018) + glow(abs(point.y), 0.018)) * step(0.72, seed) * controls.values[6];
-    let sparkle = pow(max(0.0, sin(seed * 80.0 + uniforms.time * 3.0)), 22.0) * controls.values[8];
-    let phase = clamp(depth + controls.values[7] * 0.2 + energy * 0.15, 0.0, 1.0);
-    var color = routed(88u) * (0.1 + (1.0 - depth) * 0.04);
-    color += mix(routed(76u), routed(84u), phase) * (dot * (0.35 + energy) + links * 0.12);
-    color += routed(72u) * dot * sparkle * (0.3 + extras.transient);
-    color += routed(80u) * glow(abs(uv.y - 0.48 - uniforms.audio.x * 0.08), 0.045) * 0.06;
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let t = uniforms.time * controls.values[5];
+    var color = vec3f(0.0);
+    // Layered particle field via hash cells
+    for (var layer = 0u; layer < 5u; layer += 1u) {
+        let lf = f32(layer);
+        let scale = 12.0 + lf * 10.0 * controls.values[1];
+        let id = floor(uv * scale + vec2f(t * (0.4 + lf * 0.1), t * 0.2));
+        let fuv = fract(uv * scale + vec2f(t * (0.4 + lf * 0.1), t * 0.2)) - 0.5;
+        let rnd = hash21(id + lf * 17.0);
+        let rnd2 = hash21(id.yx + lf * 9.0);
+        // Height from spectrum
+        let src = min(u32(rnd * 64.0), 63u);
+        let e = band(src);
+        let wave = sin(id.x * 0.35 + t * 1.5) * cos(id.y * 0.25 - t) * controls.values[2] * 0.15;
+        let swirl = controls.values[3] * 0.2;
+        let center = vec2f(sin(t + rnd * 6.0), cos(t * 0.7 + rnd2 * 6.0)) * swirl * (0.1 + e);
+        let fountain = exp(-length(uv) * 2.5) * controls.values[4] * (0.3 + uniforms.audio.x + extras.onset);
+        let elev = wave + e * 0.2 * controls.values[2] + fountain * (rnd - 0.3);
+        let pos = fuv - center - vec2f(0.0, elev * 0.5);
+        let sz = controls.values[6] * 0.03 * (0.4 + e);
+        let particle = glow(length(pos), sz) * step(0.25, rnd) * (0.35 + e);
+        let depth = exp(-lf * controls.values[11] * 0.35);
+        let col = mix(vec3f(0.1, 0.45, 1.0), vec3f(0.55, 0.15, 1.0), controls.values[7] * rnd2);
+        color += col * particle * depth;
+        // Trail links
+        color += col * glow(abs(pos.x * 0.7 + pos.y), sz * 2.5) * controls.values[8] * 0.08 * depth * e;
+    }
+    // Central fountain burst
+    let ang = atan2(uv.y, uv.x);
+    let burst = exp(-abs(length(uv) - 0.15 - uniforms.audio.x * 0.1) * 8.0) * controls.values[4] * 0.25;
+    color += mix(vec3f(0.3, 0.6, 1.0), vec3f(0.7, 0.2, 1.0), controls.values[7]) * burst;
+    color += vec3f(0.8, 0.9, 1.0) * glow(length(uv), 0.05) * controls.values[9] * (0.5 + extras.transient);
+    // Spiral arms
+    let spiral = fract(ang / 6.2831853 + length(uv) * 0.8 - t * 0.1);
+    color += vec3f(0.4, 0.2, 1.0) * glow(abs(spiral - 0.5), 0.04) * exp(-length(uv)) * controls.values[3] * 0.2;
+    color = tonemap(color, controls.values[10]);
     return vec4f(color, 1.0);
 }

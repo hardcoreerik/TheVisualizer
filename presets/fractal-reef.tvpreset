@@ -1,49 +1,49 @@
 //! format: 2
 //! id: thevisualizer.fractal-reef
 //! name: Fractal Reef
-//! version: 0.2.0
+//! version: 0.3.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: Audio|bass-zoom|Bass Zoom|0.0|4.0|1.25
-//! parameter: Audio|mid-drift|Mid Drift|0.0|4.0|0.8
-//! parameter: Audio|treble-detail|Treble Detail|0.0|4.0|1.35
-//! parameter: Audio|onset-punch|Onset Punch|0.0|4.0|1.5
-//! parameter: Audio|beat-rotation|Beat Rotation|0.0|3.0|0.45
-//! parameter: Camera|zoom-direction|Zoom Direction|-1.0|1.0|0.45
-//! parameter: Camera|zoom-speed|Constant Zoom Speed|0.0|3.0|0.42
-//! parameter: Camera|base-zoom|Base Zoom (Stops)|-1.0|18.0|1.4
-//! parameter: Camera|center-x|Center X|-2.0|1.0|-0.743644
-//! parameter: Camera|center-y|Center Y|-1.5|1.5|0.131826
-//! parameter: Camera|orbit|Center Orbit|0.0|2.0|0.18
-//! parameter: Camera|rotation|View Rotation|-3.1416|3.1416|0.0
-//! parameter: Fractal|iterations|Iterations|32.0|320.0|144.0
-//! parameter: Fractal|escape-radius|Escape Radius|2.0|12.0|4.0
-//! parameter: Fractal|exponent|Mandelbrot Exponent|1.5|5.0|2.0
+//! parameter: Audio|response|Response|0.4|5.0|1.85
+//! parameter: Audio|dive-power|Dive Power (Bass)|0.0|4.0|1.55
+//! parameter: Audio|path-steer|Path Steer (Mids)|0.0|4.0|1.1
+//! parameter: Audio|edge-detail|Edge Detail (Treble)|0.0|4.0|1.45
+//! parameter: Audio|onset-punch|Onset Punch|0.0|4.0|1.65
+//! parameter: Audio|beat-rotation|Beat Rotation|0.0|3.0|0.55
+//! parameter: Journey|zoom-direction|Travel Direction|-1.0|1.0|1.0
+//! parameter: Journey|travel-speed|Travel Speed|0.0|3.0|0.72
+//! parameter: Journey|base-zoom|Outer Zoom (Stops)|-1.0|12.0|1.1
+//! parameter: Journey|path-mix|Path Follow|0.0|1.0|0.92
+//! parameter: Journey|manual-x|Manual Center X|-2.0|1.0|-0.743644
+//! parameter: Journey|manual-y|Manual Center Y|-1.5|1.5|0.131826
+//! parameter: Journey|rotation|View Rotation|-3.1416|3.1416|0.0
+//! parameter: Fractal|iterations|Iterations|48.0|320.0|168.0
+//! parameter: Fractal|escape-radius|Escape Radius|2.0|12.0|6.0
+//! parameter: Fractal|exponent|Mandelbrot Exponent|1.6|4.0|2.0
 //! parameter: Fractal|julia-morph|Julia Morph|0.0|1.0|0.0
 //! parameter: Fractal|julia-x|Julia X|-1.5|1.5|-0.745
 //! parameter: Fractal|julia-y|Julia Y|-1.5|1.5|0.113
-//! parameter: Fractal|orbit-trap|Orbit Trap|0.0|4.0|1.15
-//! parameter: Fractal|boundary-glow|Boundary Glow|0.0|5.0|1.6
-//! parameter: Color|bands|Color Bands|1.0|32.0|10.0
-//! parameter: Color|palette-speed|Palette Motion|-3.0|3.0|0.18
-//! parameter: Color|palette-phase|Palette Phase|0.0|1.0|0.58
-//! parameter: Color|saturation|Saturation|0.0|2.0|1.2
-//! parameter: Color|contrast|Contrast|0.2|4.0|1.35
-//! parameter: Color|exposure|Exposure|0.1|4.0|1.15
-//! parameter: Reef|caustics|Caustics|0.0|4.0|0.9
-//! parameter: Reef|symmetry|Coral Symmetry|1.0|12.0|5.0
-//! parameter: Reef|polyp-glow|Polyp Glow|0.0|4.0|1.25
-//! parameter: Reef|depth-fog|Depth Fog|0.0|2.0|0.55
-//! parameter: Reef|spores|Spore Density|0.0|2.0|0.42
-//! parameter: Motion|current-warp|Current Warp|0.0|3.0|0.38
-//! parameter: Motion|stereo-bend|Stereo Bend|0.0|3.0|0.55
-//! parameter: Lens|color-separation|Color Separation|0.0|3.0|0.45
-//! parameter: Lens|detail-shimmer|Detail Shimmer|0.0|3.0|0.75
-//! parameter: Lens|vignette|Vignette|0.0|2.0|0.6
-//! parameter: Reef|reef-mix|Reef Texture Mix|0.0|1.0|0.72
+//! parameter: Fractal|orbit-trap|Orbit Trap|0.0|4.0|1.35
+//! parameter: Fractal|boundary-glow|Boundary Glow|0.0|5.0|1.85
+//! parameter: Color|bands|Color Bands|1.0|32.0|12.0
+//! parameter: Color|palette-speed|Palette Motion|-3.0|3.0|0.28
+//! parameter: Color|palette-phase|Palette Phase|0.0|1.0|0.42
+//! parameter: Color|saturation|Saturation|0.0|2.0|1.25
+//! parameter: Color|contrast|Contrast|0.2|4.0|1.4
+//! parameter: Color|exposure|Exposure|0.1|4.0|1.2
+//! parameter: Analog|wave-formation|Waveform Formation|0.0|4.0|1.55
+//! parameter: Analog|spectrum-sculpt|Spectrum Sculpt|0.0|3.0|0.85
+//! parameter: Analog|scope-trace|Scope Trace|0.0|3.0|1.1
+//! parameter: Analog|formation-decay|Formation Decay|0.0|2.0|0.75
+//! parameter: Analog|stereo-complex|Stereo Complex|0.0|3.0|0.65
+//! parameter: Reef|caustics|Caustics|0.0|4.0|0.55
+//! parameter: Reef|symmetry|Coral Symmetry|1.0|12.0|4.0
+//! parameter: Reef|depth-fog|Depth Fog|0.0|2.0|0.42
+//! parameter: Lens|detail-shimmer|Detail Shimmer|0.0|3.0|0.65
+//! parameter: Lens|vignette|Vignette|0.0|2.0|0.55
+//! parameter: Reef|reef-mix|Reef Texture Mix|0.0|1.0|0.35
 //! parameter: Motion|time-direction|Time Direction|-1.0|1.0|1.0
-//! parameter: Motion|motion-phase|Motion Phase|0.0|20.0|0.0
+//! parameter: Motion|motion-phase|Motion Phase|0.0|40.0|0.0
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
@@ -79,32 +79,119 @@ fn hsv(h: f32, s: f32, v: f32) -> vec3f {
     return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
 }
 
+fn hermite(t: f32) -> f32 {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Famous Mandelbrot waypoints chosen so each dive reveals new structure.
+fn waypoint(index: i32) -> vec2f {
+    switch index {
+        case 0: {
+            // Seahorse Valley — classic deep travel corridor
+            return vec2f(-0.743643887037151, 0.131825904205312);
+        }
+        case 1: {
+            // Deeper seahorse filament
+            return vec2f(-0.7435669, 0.1314023);
+        }
+        case 2: {
+            // Elephant Valley / period bulb edge
+            return vec2f(0.275282, 0.006208);
+        }
+        case 3: {
+            // Mini Mandelbrot near the spike
+            return vec2f(-1.768778833, -0.001738996);
+        }
+        case 4: {
+            // Triple spiral valley
+            return vec2f(-0.088, 0.654);
+        }
+        default: {
+            // Scepter / lower antenna region
+            return vec2f(-0.1592, -1.0317);
+        }
+    }
+}
+
+fn journey_center(travel: f32, steer: f32) -> vec2f {
+    // Six legs of continuous travel; mids advance/retard the path.
+    let legs = 6.0;
+    let t = fract(travel * 0.085 + steer * 0.04) * legs;
+    let i0 = i32(floor(t)) % 6;
+    let i1 = (i0 + 1) % 6;
+    let f = hermite(fract(t));
+    var a = waypoint(i0);
+    var b = waypoint(i1);
+    // Mid-path micro-orbit so the center never sits dead-still while zooming.
+    let micro = 0.00035 * vec2f(
+        sin(travel * 1.7 + f * 6.2831853),
+        cos(travel * 1.3 - f * 4.1887902)
+    );
+    return mix(a, b, f) + micro * (1.0 + steer);
+}
+
+fn cpow(z: vec2f, power: f32) -> vec2f {
+    let radius = length(z);
+    let angle = atan2(z.y, z.x) * power;
+    let magnitude = pow(max(radius, 1.0e-8), power);
+    return magnitude * vec2f(cos(angle), sin(angle));
+}
+
 struct FractalSample {
     smooth_iteration: f32,
     inside: f32,
     trap: f32,
     radius: f32,
+    orbit_spin: f32,
 }
 
-fn mandelbrot(point: vec2f, julia_mix: f32, max_iterations: i32, escape_radius: f32, power: f32) -> FractalSample {
+// Analog-rhythm Mandelbrot: each iteration injects a waveform sample into z,
+// so the set is literally formed by the live signal the way an analog computer
+// would force an orbit.
+fn mandelbrot_analog(
+    point: vec2f,
+    julia_mix: f32,
+    max_iterations: i32,
+    escape_radius: f32,
+    power: f32,
+    wave_drive: f32,
+    spectrum_drive: f32,
+    formation_decay: f32,
+) -> FractalSample {
     let julia_constant = vec2f(controls.values[17], controls.values[18]);
-    let c = mix(point, julia_constant, julia_mix);
+    // Spectrum sculpts the constant: bass pulls real, treble pulls imag.
+    let spectral_bias = vec2f(
+        (features.spectrum[2] + features.spectrum[3] - features.spectrum[8]) * spectrum_drive * 0.045,
+        (features.spectrum[20] + features.spectrum[28] - features.spectrum[40]) * spectrum_drive * 0.04
+    );
+    let c = mix(point, julia_constant, julia_mix) + spectral_bias;
     var z = mix(vec2f(0.0), point, julia_mix);
     var escaped = false;
     var iteration = 0.0;
     var trap = 1000.0;
     var radius = 0.0;
+    var spin = 0.0;
+    let decay = 0.25 + formation_decay * 1.5;
     for (var i = 0; i < 320; i += 1) {
         if i < max_iterations && !escaped {
             radius = length(z);
             trap = min(trap, min(abs(z.x), abs(z.y)));
+            spin += atan2(z.y, z.x) * 0.01;
             if radius > escape_radius {
                 escaped = true;
                 iteration = f32(i) + 1.0 - log2(max(log2(max(radius, 1.0001)), 0.0001));
             } else {
-                let angle = atan2(z.y, z.x) * power;
-                let magnitude = pow(max(radius, 0.000001), power);
-                z = magnitude * vec2f(cos(angle), sin(angle)) + c;
+                z = cpow(z, power) + c;
+                // Waveform → complex forcing term (analog rhythm).
+                // Sample along the wave at the iteration index so each orbit step
+                // is a different part of the current audio grain.
+                let wi = u32(i) % 256u;
+                let w0 = features.waveform[wi];
+                let w1 = features.waveform[(wi + 64u) % 256u];
+                let w2 = features.waveform[(wi + 128u) % 256u];
+                let inject = wave_drive * 0.085 * vec2f(w0 * 0.7 + w2 * 0.3, w1);
+                let falloff = 1.0 / (1.0 + f32(i) * decay * 0.045);
+                z += inject * falloff;
                 iteration = f32(i);
             }
         }
@@ -113,21 +200,25 @@ fn mandelbrot(point: vec2f, julia_mix: f32, max_iterations: i32, escape_radius: 
         iteration / max(f32(max_iterations), 1.0),
         select(1.0, 0.0, escaped),
         trap,
-        radius
+        radius,
+        spin
     );
 }
 
-fn sample_color(point: vec2f, detail_audio: f32, time: f32) -> vec3f {
-    let iterations = i32(clamp(controls.values[13] + detail_audio * 48.0, 32.0, 320.0));
-    let sample = mandelbrot(
+fn sample_color(point: vec2f, detail_audio: f32, time: f32, wave_drive: f32, spectrum_drive: f32) -> vec3f {
+    let iterations = i32(clamp(controls.values[13] + detail_audio * 56.0, 48.0, 320.0));
+    let sample = mandelbrot_analog(
         point,
         controls.values[16],
         iterations,
         controls.values[14],
-        controls.values[15]
+        controls.values[15],
+        wave_drive,
+        spectrum_drive,
+        controls.values[30]
     );
     let bands = controls.values[21];
-    let palette_motion = time * controls.values[22] + controls.values[23];
+    let palette_motion = time * controls.values[22] + controls.values[23] + sample.orbit_spin * 0.15;
     let band_phase = fract(sample.smooth_iteration * bands + palette_motion);
     let routed_phase = 0.5 + 0.5 * sin((band_phase + palette_motion) * 6.2831853);
     let routed_color = mix(
@@ -136,17 +227,42 @@ fn sample_color(point: vec2f, detail_audio: f32, time: f32) -> vec3f {
         routed_phase
     );
     let spectral = hsv(
-        band_phase + controls.values[23],
+        band_phase + controls.values[23] + features.spectrum[12] * 0.08,
         controls.values[24],
-        0.35 + 0.65 * pow(band_phase, 0.55)
+        0.32 + 0.68 * pow(max(band_phase, 0.001), 0.5)
     );
-    let boundary = exp(-abs(fract(sample.smooth_iteration * bands) - 0.5) * 8.0)
+    let boundary = exp(-abs(fract(sample.smooth_iteration * bands) - 0.5) * 9.0)
         * controls.values[20];
-    let trap = exp(-sample.trap * (20.0 + controls.values[19] * 45.0))
+    let trap = exp(-sample.trap * (18.0 + controls.values[19] * 50.0))
         * controls.values[19];
-    let interior = sample.inside * (0.025 + trap * 0.35);
-    return mix(spectral, routed_color, 0.58) * (0.18 + boundary * 0.42 + trap * 0.35)
+    let interior = sample.inside * (0.02 + trap * 0.4);
+    return mix(spectral, routed_color, 0.55) * (0.16 + boundary * 0.48 + trap * 0.38)
         + routed_color * interior;
+}
+
+// Project the live waveform as a complex-plane scope trace so the analog
+// signal is visible traveling through the fractal field.
+fn scope_trace_glow(complex_uv: vec2f, strength: f32, time: f32) -> f32 {
+    if strength < 0.001 {
+        return 0.0;
+    }
+    var glow = 0.0;
+    // 48 segments keep the cost bounded while still reading as a continuous path.
+    for (var s = 0; s < 48; s += 1) {
+        let i0 = u32(s * 5) % 256u;
+        let i1 = (i0 + 5u) % 256u;
+        let a = vec2f(features.waveform[i0], features.waveform[(i0 + 128u) % 256u]);
+        let b = vec2f(features.waveform[i1], features.waveform[(i1 + 128u) % 256u]);
+        // Map unit-ish waveform into local complex window.
+        let pa = a * (0.55 + 0.25 * sin(time * 0.7 + f32(s) * 0.1));
+        let pb = b * (0.55 + 0.25 * sin(time * 0.7 + f32(s) * 0.1));
+        let ab = pb - pa;
+        let t = clamp(dot(complex_uv - pa, ab) / max(dot(ab, ab), 1.0e-5), 0.0, 1.0);
+        let closest = pa + ab * t;
+        let d = length(complex_uv - closest);
+        glow += exp(-d * d * (2200.0 + strength * 1800.0));
+    }
+    return glow * strength * 0.45;
 }
 
 @fragment fn fs_main(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
@@ -155,70 +271,87 @@ fn sample_color(point: vec2f, detail_audio: f32, time: f32) -> vec3f {
     uv /= max(scene.values[4], 0.35);
 
     let response = controls.values[0];
-    let bass = clamp(uniforms.audio.x * response, 0.0, 1.5);
-    let mids = clamp(uniforms.audio.y * response, 0.0, 1.5);
-    let treble = clamp(uniforms.audio.z * response, 0.0, 1.5);
-    let beat = clamp(extras.onset + extras.transient * 0.65, 0.0, 1.5);
+    let bass = clamp(uniforms.audio.x * response, 0.0, 1.6);
+    let mids = clamp(uniforms.audio.y * response, 0.0, 1.6);
+    let treble = clamp(uniforms.audio.z * response, 0.0, 1.6);
+    let rms = clamp(uniforms.audio.w * response, 0.0, 1.6);
+    let peak = clamp(extras.peak * response, 0.0, 2.0);
+    let beat = clamp(extras.onset + extras.transient * 0.7, 0.0, 1.6);
     let time = (uniforms.time + controls.values[39]) * controls.values[38];
 
-    let zoom_clock = time * controls.values[7] * controls.values[6] * 0.16
-        + bass * controls.values[1] * 0.12
-        + beat * controls.values[4] * 0.08;
-    let magnification = exp2(clamp(controls.values[8] + zoom_clock, -2.0, 24.0));
-    let orbit = controls.values[11] / max(sqrt(magnification), 1.0);
-    let center = vec2f(controls.values[9], controls.values[10])
-        + orbit * vec2f(
-            sin(time * 0.17 + mids * controls.values[2]),
-            cos(time * 0.13 + mids * controls.values[2])
-        );
+    // Energy gate: silence pulls the camera back; music pushes the journey.
+    let energy = clamp(bass * 0.5 + mids * 0.25 + treble * 0.1 + rms * 0.35 + beat * 0.4, 0.0, 2.0);
+    let energy_gate = smoothstep(0.015, 0.2, energy);
+
+    // Travel phase advances faster with music so the ride feels conducted.
+    let travel_speed = controls.values[7] * (0.35 + energy_gate * 1.4 + bass * controls.values[1] * 0.25);
+    let travel = time * travel_speed * 0.55 + controls.values[39] * 0.1;
+
+    // Dive cycle: accelerate into detail, then soft wrap to the next waypoint.
+    // cycle_t 0 = outer overview, 1 = deep inside the current corridor.
+    let cycle_t = fract(travel * 0.28 + beat * controls.values[4] * 0.02);
+    let dive_curve = pow(cycle_t, 0.48); // linger slightly out, then commit inward
+    let direction = controls.values[6];
+    let directed_dive = select(1.0 - dive_curve, dive_curve, direction >= 0.0);
+    // Bass deepens the corridor; silence keeps you near the surface.
+    let depth_stops = controls.values[8]
+        + directed_dive * (5.5 + controls.values[1] * 5.0) * mix(0.18, 1.0, energy_gate)
+        + beat * controls.values[4] * 0.45;
+    let magnification = exp2(clamp(depth_stops, -1.5, 26.0));
+
+    // Path through Mandelbrot landmarks, blended with optional manual center.
+    let path = journey_center(travel + mids * controls.values[2] * 0.35, mids * controls.values[2]);
+    let manual = vec2f(controls.values[10], controls.values[11]);
+    // Note: parameters reordered — path-mix is [9], manual x/y are [10]/[11]
+    let center = mix(manual, path, controls.values[9]);
+
     let rotation = controls.values[12]
-        + beat * controls.values[5] * 0.15
-        + time * controls.values[5] * 0.012;
+        + beat * controls.values[5] * 0.18
+        + time * controls.values[5] * 0.01
+        + mids * controls.values[2] * 0.03;
     uv = rotate(uv, rotation);
-    uv.x += sin(uv.y * 3.0 + time * 0.31) * controls.values[32] * 0.012;
-    uv.y += sin(uv.x * 2.5 - time * 0.27) * controls.values[32] * 0.01;
-    let stereo = features.waveform[64] - features.waveform[192];
-    uv.x += stereo * controls.values[33] * 0.018;
+
+    // Stereo maps into a tiny complex shear (analog L/R into the plane).
+    let stereo = features.waveform[32] - features.waveform[160];
+    uv.x += stereo * controls.values[31] * 0.02;
+
     let point = center + uv / magnification;
 
-    let separation = controls.values[34] / max(magnification, 1.0) * 0.0008;
-    let detail_audio = treble * controls.values[3] + beat * 0.35;
-    var color = sample_color(point, detail_audio, time);
-    if controls.values[34] > 0.001 {
-        let red = sample_color(point + vec2f(separation, 0.0), detail_audio, time).r;
-        let blue = sample_color(point - vec2f(separation, 0.0), detail_audio, time).b;
-        color = vec3f(red, color.g, blue);
-    }
+    let wave_drive = controls.values[27] * (0.35 + energy_gate * 0.9 + beat * 0.35);
+    let spectrum_drive = controls.values[28] * (0.4 + treble * 0.8);
+    let detail_audio = treble * controls.values[3] + beat * 0.4;
 
+    var color = sample_color(point, detail_audio, time, wave_drive, spectrum_drive);
+
+    // Scope trace in the local complex window (uv space ≈ complex offset * mag).
+    let local_complex = uv * (0.9 / max(sqrt(magnification) * 0.08, 0.15));
+    let trace = scope_trace_glow(local_complex, controls.values[29] * energy_gate, time);
+    color += vec3f(scene.values[72], scene.values[73], scene.values[74]) * trace * (0.35 + treble);
+
+    // Light reef accents (kept subtle so the journey stays primary).
     let angle = atan2(uv.y, uv.x);
-    let symmetry = max(1.0, floor(controls.values[28] + 0.5));
-    let coral = pow(max(0.0, cos(angle * symmetry + time * 0.08)), 8.0);
-    let caustic = pow(max(
-        0.0,
-        sin(uv.x * 18.0 + sin(uv.y * 13.0 + time) + time * 1.2)
-    ), 14.0) * controls.values[27];
-    let polyp = pow(max(0.0, sin(angle * symmetry * 3.0 + magnification * 0.0001)), 20.0)
-        * controls.values[29] * (0.2 + treble + beat);
-    let spores = step(
-        0.998 - controls.values[31] * 0.004,
-        hash21(floor((uv + vec2f(time * 0.01, -time * 0.018)) * 110.0))
-    ) * (0.1 + treble);
-    let reef_texture = coral * 0.14 + caustic * 0.08 + polyp * 0.12 + spores * 0.35;
-    color += mix(vec3f(0.0), vec3f(scene.values[72], scene.values[73], scene.values[74])
-        * reef_texture, controls.values[37]);
+    let symmetry = max(1.0, floor(controls.values[33] + 0.5));
+    let coral = pow(max(0.0, cos(angle * symmetry + travel * 0.2)), 10.0);
+    let caustic = pow(max(0.0, sin(uv.x * 16.0 + sin(uv.y * 11.0 + time) + time)), 16.0)
+        * controls.values[32];
+    let reef_texture = coral * 0.1 + caustic * 0.07;
+    color += mix(
+        vec3f(0.0),
+        vec3f(scene.values[72], scene.values[73], scene.values[74]) * reef_texture,
+        controls.values[37]
+    );
 
-    let shimmer = 1.0 + sin(
-        (uv.x + uv.y) * 220.0 + time * 4.0
-    ) * treble * controls.values[35] * 0.035;
+    let shimmer = 1.0 + sin((uv.x + uv.y) * 240.0 + time * 5.0)
+        * treble * controls.values[35] * 0.03;
     color *= shimmer;
-    color = pow(max(color, vec3f(0.0)), vec3f(1.0 / controls.values[25]));
-    color = 1.0 - exp(-color * controls.values[26] * (0.8 + scene.values[92]));
-    let fog = 1.0 - exp(-length(uv) * controls.values[30] * 0.32);
-    color = mix(color, vec3f(scene.values[88], scene.values[89], scene.values[90]) * 0.18, fog);
+    color = pow(max(color, vec3f(0.0)), vec3f(1.0 / max(controls.values[25], 0.2)));
+    color = 1.0 - exp(-color * controls.values[26] * (0.75 + scene.values[92] + energy * 0.15));
+    let fog = 1.0 - exp(-length(uv) * controls.values[34] * 0.28);
+    color = mix(color, vec3f(scene.values[88], scene.values[89], scene.values[90]) * 0.16, fog);
     let vignette = 1.0 - smoothstep(
-        0.35,
-        1.45,
-        length(uv) * (0.8 + controls.values[36] * 0.3)
-    ) * controls.values[36] * 0.45;
+        0.32,
+        1.4,
+        length(uv) * (0.75 + controls.values[36] * 0.35)
+    ) * controls.values[36] * 0.4;
     return vec4f(color * vignette, 1.0);
 }

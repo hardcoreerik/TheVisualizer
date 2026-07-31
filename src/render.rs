@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     num::NonZeroU64,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -14,6 +15,10 @@ use eframe::{
 
 use crate::analysis::{SPECTRUM_BANDS, WAVEFORM_POINTS};
 use crate::preset::Preset;
+
+const VALLEY_FLIGHT_ID: &str = "thevisualizer.pixel-valley-flight";
+const TERRAIN_LAYER_COUNT: u32 = 4;
+const TERRAIN_TEXTURE_SIZE: u32 = 512;
 
 const AUDIO_FEATURE_FLOATS: usize = WAVEFORM_POINTS + SPECTRUM_BANDS;
 const FRAME_EXTRAS_FLOATS: usize = 8;
@@ -122,6 +127,7 @@ impl GpuPresetRenderer {
         let resources = create_resources(
             state,
             &preset.name,
+            &preset.id,
             &preset.shader,
             wgpu::BlendState {
                 color: wgpu::BlendComponent {
@@ -150,6 +156,7 @@ impl GpuPresetRenderer {
         let resources = create_resources(
             state,
             "Zone Studio",
+            "host.zone-studio",
             include_str!("zone_overlay.wgsl"),
             wgpu::BlendState::ALPHA_BLENDING,
         )?;
@@ -167,6 +174,7 @@ impl GpuPresetRenderer {
         let resources = create_resources(
             &self.state,
             &preset.name,
+            &preset.id,
             &preset.shader,
             wgpu::BlendState {
                 color: wgpu::BlendComponent {
@@ -228,18 +236,156 @@ fn insert_resources(state: &egui_wgpu::RenderState, key: u64, resources: PresetR
     }
 }
 
+fn terrain_asset_directory() -> PathBuf {
+    if let Some(path) = std::env::var_os("THEVISUALIZER_ASSETS") {
+        let path = PathBuf::from(path).join("valley-flight");
+        if path.is_dir() {
+            return path;
+        }
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(path) = executable
+            .parent()
+            .map(|parent| parent.join("assets/valley-flight"))
+            .filter(|path| path.is_dir())
+        {
+            return path;
+        }
+        // cargo run: target/<profile>/thevisualizer.exe → repo assets/
+        if let Some(path) = executable
+            .parent()
+            .and_then(|profile| profile.parent())
+            .and_then(|target| target.parent())
+            .map(|root| root.join("assets/valley-flight"))
+            .filter(|path| path.is_dir())
+        {
+            return path;
+        }
+    }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/valley-flight");
+    if manifest.is_dir() {
+        return manifest;
+    }
+    PathBuf::from("assets/valley-flight")
+}
+
+fn load_rgba_layer(path: &Path) -> Result<image::RgbaImage, String> {
+    let image = image::open(path)
+        .map_err(|error| format!("Could not open terrain texture {}: {error}", path.display()))?
+        .to_rgba8();
+    if image.width() != TERRAIN_TEXTURE_SIZE || image.height() != TERRAIN_TEXTURE_SIZE {
+        return Err(format!(
+            "Terrain texture {} must be {TERRAIN_TEXTURE_SIZE}×{TERRAIN_TEXTURE_SIZE}, got {}×{}",
+            path.display(),
+            image.width(),
+            image.height()
+        ));
+    }
+    Ok(image)
+}
+
+fn create_terrain_texture_array(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    preset_id: &str,
+) -> Result<(wgpu::Texture, wgpu::TextureView, wgpu::Sampler), String> {
+    let mut layers = Vec::with_capacity(TERRAIN_LAYER_COUNT as usize);
+    if preset_id == VALLEY_FLIGHT_ID {
+        let directory = terrain_asset_directory();
+        let names = [
+            "terrain-grass.png",
+            "terrain-rock.png",
+            "terrain-dirt.png",
+            "terrain-macro.png",
+        ];
+        for name in names {
+            let path = directory.join(name);
+            if path.is_file() {
+                layers.push(load_rgba_layer(&path)?);
+            }
+        }
+    }
+    if layers.len() != TERRAIN_LAYER_COUNT as usize {
+        // Neutral 1×1 fallback keeps other presets' bind groups valid.
+        layers = (0..TERRAIN_LAYER_COUNT)
+            .map(|_| image::RgbaImage::from_pixel(1, 1, image::Rgba([200, 200, 200, 255])))
+            .collect();
+    }
+    let width = layers[0].width();
+    let height = layers[0].height();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("TheVisualizer terrain texture array"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: TERRAIN_LAYER_COUNT,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (layer, image) in layers.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            image.as_raw(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("TheVisualizer terrain texture array view"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("TheVisualizer terrain sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_w: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    Ok((texture, view, sampler))
+}
+
 fn create_resources(
     state: &egui_wgpu::RenderState,
     label: &str,
+    preset_id: &str,
     shader_source: &str,
     blend: wgpu::BlendState,
 ) -> Result<PresetResources, String> {
     let device = &state.device;
+    let queue = &state.queue;
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
+    let (_terrain_texture, terrain_view, terrain_sampler) =
+        create_terrain_texture_array(device, queue, preset_id)?;
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("TheVisualizer preset uniforms"),
         entries: &[
@@ -311,6 +457,22 @@ fn create_resources(
                         (PRESET_HISTORY_FLOATS * size_of::<f32>()) as u64,
                     ),
                 },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
         ],
@@ -403,6 +565,14 @@ fn create_resources(
                 binding: 5,
                 resource: spectrum_history_buffer.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&terrain_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(&terrain_sampler),
+            },
         ],
     });
     if let Some(error) = pollster::block_on(error_scope.pop()) {
@@ -421,6 +591,9 @@ fn create_resources(
         scene_buffer,
         parameter_buffer,
         spectrum_history_buffer,
+        _terrain_texture,
+        _terrain_view: terrain_view,
+        _terrain_sampler: terrain_sampler,
     })
 }
 
@@ -537,6 +710,9 @@ struct PresetResources {
     scene_buffer: wgpu::Buffer,
     parameter_buffer: wgpu::Buffer,
     spectrum_history_buffer: wgpu::Buffer,
+    _terrain_texture: wgpu::Texture,
+    _terrain_view: wgpu::TextureView,
+    _terrain_sampler: wgpu::Sampler,
 }
 
 #[cfg(test)]

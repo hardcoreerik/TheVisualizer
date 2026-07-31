@@ -15,7 +15,10 @@ const MAX_PARTICLES: u32 = 262_144;
 const MAX_MODEL_POINTS: usize = 500_000;
 const PARTICLE_FLOATS: usize = 16;
 const NODE_FLOATS: usize = 16;
-const UNIFORM_FLOATS: usize = 32;
+/// 14 × vec4: core sim + mode_params[8] + spectrum[16] for Spectral Form.
+const UNIFORM_FLOATS: usize = 56;
+pub const MODE_PARAM_COUNT: usize = 8;
+pub const SPECTRUM_PACK: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForgeQuality {
@@ -264,10 +267,20 @@ pub struct ParticleForgeState {
     pub camera_zoom: f32,
     pub auto_camera: bool,
     pub camera_override_until: f32,
+    /// Once the user orbits/zooms, mode switches stop overwriting camera framing.
+    pub user_camera_locked: bool,
     pub gizmo: bool,
     pub reverse: bool,
     pub gradient_shift: f32,
     pub event_envelope: f32,
+    /// GPU physics branch index (0 = original Particle Vortex). See particle_forge.wgsl.
+    pub physics_mode: f32,
+    /// Bumped on every mode change so the GPU hard-respawns all particles.
+    pub reseed_epoch: f32,
+    /// Per-mode specialized knobs (labels/ranges come from ParticleStyle UI).
+    pub mode_params: [f32; MODE_PARAM_COUNT],
+    /// World-space pan of the particle field (right-drag in the Particles visual).
+    pub field_offset: [f32; 2],
     pub nodes: Vec<ForgeNode>,
     pub selected: Option<usize>,
     pub routes: Vec<ForgeModRoute>,
@@ -275,7 +288,8 @@ pub struct ParticleForgeState {
     pub model_notice: Option<String>,
     pub drag_origin: Option<[f32; 3]>,
     pub camera_drag_origin: Option<[f32; 2]>,
-    pub secondary_drag_origin: Option<[f32; 2]>,
+    /// Start field_offset for right-drag pan.
+    pub field_drag_origin: Option<[f32; 2]>,
 }
 
 impl Default for ParticleForgeState {
@@ -292,12 +306,17 @@ impl Default for ParticleForgeState {
             camera_yaw: 0.0,
             camera_pitch: 0.12,
             camera_zoom: 1.0,
-            auto_camera: true,
+            auto_camera: false,
             camera_override_until: 0.0,
+            user_camera_locked: false,
             gizmo: false,
             reverse: false,
             gradient_shift: 0.0,
             event_envelope: 0.0,
+            physics_mode: 0.0,
+            reseed_epoch: 1.0,
+            mode_params: [0.35, 0.42, 0.85, 0.55, 0.2, 0.25, 1.0, 1.0],
+            field_offset: [0.0, 0.0],
             nodes: vec![ForgeNode::default()],
             selected: Some(0),
             routes: Vec::new(),
@@ -305,12 +324,17 @@ impl Default for ParticleForgeState {
             model_notice: None,
             drag_origin: None,
             camera_drag_origin: None,
-            secondary_drag_origin: None,
+            field_drag_origin: None,
         }
     }
 }
 
 impl ParticleForgeState {
+    /// Call when the physics mode changes so GPU particles fully respawn.
+    pub fn bump_reseed(&mut self) {
+        self.reseed_epoch = (self.reseed_epoch + 1.0).rem_euclid(100_000.0).max(1.0);
+    }
+
     pub fn add_node(&mut self, position: [f32; 3]) {
         if self.nodes.len() >= MAX_FORGE_NODES {
             return;
@@ -504,10 +528,15 @@ impl ParticleForgeState {
             camera_zoom: parse_range(values[14], 0.35, 3.0)?,
             auto_camera: parse_bool(values[15])?,
             camera_override_until: 0.0,
+            user_camera_locked: false,
             gizmo: parse_bool(values[16])?,
             reverse: parse_bool(values[17])?,
             gradient_shift: parse_range(values[18], 0.0, 1.0)?,
             event_envelope: 0.0,
+            physics_mode: 0.0,
+            reseed_epoch: 1.0,
+            mode_params: [0.35, 0.42, 0.85, 0.55, 0.2, 0.25, 1.0, 1.0],
+            field_offset: [0.0, 0.0],
             nodes,
             selected: (selected >= 0).then_some(selected as usize),
             routes,
@@ -515,7 +544,7 @@ impl ParticleForgeState {
             model_notice: None,
             drag_origin: None,
             camera_drag_origin: None,
-            secondary_drag_origin: None,
+            field_drag_origin: None,
         };
         if state.nodes.is_empty() {
             state.nodes.push(ForgeNode::default());
@@ -573,6 +602,8 @@ pub struct ForgeFrame<'a> {
     pub rms: f32,
     pub onset: f32,
     pub transient: f32,
+    /// Coarse 8-band spectrum for fountain / gravity-well modes.
+    pub spectrum8: [f32; SPECTRUM_PACK],
     pub state: &'a ParticleForgeState,
     pub colors: [[f32; 4]; 3],
 }
@@ -612,13 +643,27 @@ impl ParticleForgeRenderer {
         }
     }
 
+    /// Zero both ping-pong particle buffers so the next compute step respawns every particle.
+    pub fn reseed_particles(&self) {
+        if let Some(resources) = self
+            .state
+            .renderer
+            .write()
+            .callback_resources
+            .get_mut::<ForgeResources>()
+        {
+            resources.pending_reseed = true;
+        }
+    }
+
     pub fn paint(&self, painter: &egui::Painter, rect: egui::Rect, frame: ForgeFrame<'_>) {
         let mut nodes = [0.0_f32; MAX_FORGE_NODES * NODE_FLOATS];
+        let field = frame.state.field_offset;
         for (index, node) in frame.state.nodes.iter().take(MAX_FORGE_NODES).enumerate() {
             let offset = index * NODE_FLOATS;
             nodes[offset..offset + 4].copy_from_slice(&[
-                node.position[0],
-                node.position[1],
+                node.position[0] + field[0],
+                node.position[1] + field[1],
                 node.position[2],
                 node.radius,
             ]);
@@ -637,6 +682,8 @@ impl ParticleForgeRenderer {
         }
         let state = frame.state;
         let direction = if state.reverse { -1.0 } else { 1.0 };
+        let mp = state.mode_params;
+        let sp = frame.spectrum8;
         let uniforms = [
             rect.width(),
             rect.height(),
@@ -651,13 +698,16 @@ impl ParticleForgeRenderer {
             frame.gain,
             state.quality.particle_count() as f32,
             state.nodes.len().min(MAX_FORGE_NODES) as f32,
-            state.topology.code(),
-            state.topology_morph,
+            // Slot used by GPU as reseed epoch (topology still available via mode_params path).
+            state.reseed_epoch,
+            // Field pan X (was topology_morph; morph is mode-local / unused on GPU).
+            state.field_offset[0],
             state.spin[0] * direction,
             state.spin[1] * direction,
             state.spin[2] * direction,
             state.twist,
-            state.precession,
+            // Field pan Y (was precession; unused on GPU forces).
+            state.field_offset[1],
             state.materials.energy,
             state.materials.cyber,
             state.materials.cosmic,
@@ -671,8 +721,32 @@ impl ParticleForgeRenderer {
                 .model
                 .as_ref()
                 .map_or(0.0, |model| model.points.len() as f32),
-            0.0,
+            state.physics_mode.clamp(0.0, 9.0),
             f32::from(state.auto_camera && frame.time >= state.camera_override_until),
+            mp[0],
+            mp[1],
+            mp[2],
+            mp[3],
+            mp[4],
+            mp[5],
+            mp[6],
+            mp[7],
+            sp[0],
+            sp[1],
+            sp[2],
+            sp[3],
+            sp[4],
+            sp[5],
+            sp[6],
+            sp[7],
+            sp[8],
+            sp[9],
+            sp[10],
+            sp[11],
+            sp[12],
+            sp[13],
+            sp[14],
+            sp[15],
         ];
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
@@ -690,9 +764,10 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
     let device = &state.device;
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Particle Forge 3D"),
+        label: Some("Particle Forge GPU"),
         source: wgpu::ShaderSource::Wgsl(include_str!("particle_forge.wgsl").into()),
     });
+    let particle_floats = MAX_PARTICLES as usize * PARTICLE_FLOATS;
     let compute_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Particle Forge compute bind group"),
         entries: &[
@@ -706,7 +781,7 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
                 1,
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: false },
-                MAX_PARTICLES as usize * PARTICLE_FLOATS,
+                particle_floats,
             ),
             buffer_entry(
                 2,
@@ -735,7 +810,7 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
                 1,
                 wgpu::ShaderStages::VERTEX,
                 wgpu::BufferBindingType::Storage { read_only: true },
-                MAX_PARTICLES as usize * PARTICLE_FLOATS,
+                particle_floats,
             ),
             buffer_entry(
                 2,
@@ -757,7 +832,7 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
         immediate_size: 0,
     });
     let compute = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Particle Forge simulation"),
+        label: Some("Particle Forge GPU simulation"),
         layout: Some(&compute_pipeline_layout),
         module: &shader,
         entry_point: Some("cs_main"),
@@ -770,7 +845,7 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
         immediate_size: 0,
     });
     let render = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Particle Forge particles"),
+        label: Some("Particle Forge GPU particles"),
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -806,11 +881,11 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
         contents: bytemuck::cast_slice(&[0.0_f32; UNIFORM_FLOATS]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
     });
-    let particles = device.create_buffer(&wgpu::BufferDescriptor {
+    let zero_particles = vec![0.0_f32; particle_floats];
+    let particles = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Particle Forge particles"),
-        size: (MAX_PARTICLES as usize * PARTICLE_FLOATS * size_of::<f32>()) as u64,
-        usage: wgpu::BufferUsages::STORAGE,
-        mapped_at_creation: false,
+        contents: bytemuck::cast_slice(&zero_particles),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
     let nodes = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Particle Forge nodes"),
@@ -884,6 +959,9 @@ fn create_resources(state: &egui_wgpu::RenderState) -> Result<ForgeResources, St
         nodes,
         colors,
         model_points,
+        particles,
+        particle_floats,
+        pending_reseed: false,
     })
 }
 
@@ -921,17 +999,24 @@ impl egui_wgpu::CallbackTrait for ForgeCallback {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        if let Some(resources) = resources.get::<ForgeResources>() {
+        if let Some(resources) = resources.get_mut::<ForgeResources>() {
+            if resources.pending_reseed {
+                let zeros = vec![0.0_f32; resources.particle_floats];
+                queue.write_buffer(&resources.particles, 0, bytemuck::cast_slice(&zeros));
+                resources.pending_reseed = false;
+            }
             queue.write_buffer(&resources.uniforms, 0, bytemuck::cast_slice(&self.uniforms));
             queue.write_buffer(&resources.nodes, 0, bytemuck::cast_slice(&self.nodes));
             queue.write_buffer(&resources.colors, 0, bytemuck::cast_slice(&self.colors));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Particle Forge simulation"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&resources.compute);
-            pass.set_bind_group(0, &resources.compute_bind_group, &[]);
-            pass.dispatch_workgroups(self.particle_count.div_ceil(256), 1, 1);
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Particle Forge GPU simulation"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&resources.compute);
+                pass.set_bind_group(0, &resources.compute_bind_group, &[]);
+                pass.dispatch_workgroups(self.particle_count.div_ceil(256), 1, 1);
+            }
         }
         Vec::new()
     }
@@ -959,6 +1044,9 @@ struct ForgeResources {
     nodes: wgpu::Buffer,
     colors: wgpu::Buffer,
     model_points: wgpu::Buffer,
+    particles: wgpu::Buffer,
+    particle_floats: usize,
+    pending_reseed: bool,
 }
 
 #[cfg(test)]

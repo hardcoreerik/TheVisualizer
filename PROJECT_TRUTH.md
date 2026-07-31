@@ -1,6 +1,6 @@
 # Project Truth
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 This document records verified project state. Planned behavior belongs in the [Roadmap](ROADMAP.md) and design documents, not in this file.
 
@@ -9,7 +9,8 @@ This document records verified project state. Planned behavior belongs in the [R
 - `F:\Ai\TheVisualizer` began as an empty directory.
 - A Git repository was initialized with protected source-of-truth branch `main` and GitHub remote `origin` (`https://github.com/hardcoreerik/TheVisualizer`, public).
 - The implementation and documentation foundation is authored on `docs/project-foundation`; it is published as a review lane and is **not** merged into `main`.
-- On 2026-07-30, `origin/main` remained empty initialize commit `be7a8e0` (zero tree files). `origin/docs/project-foundation` advanced through commit `d2ca239` (Event Horizon motion, AI pack lane, documentation truth-sync). Public PR [#1](https://github.com/hardcoreerik/TheVisualizer/pull/1) was opened to land the branch on `main`; it is not merged.
+- On 2026-07-30, public PR [#1](https://github.com/hardcoreerik/TheVisualizer/pull/1) was opened from `docs/project-foundation` onto the empty initialize `main` (`be7a8e0`, zero tree files).
+- On 2026-07-31, PR #1 was merged with merge commit `42a0467`. `origin/main` now contains the Windows v0.1 development baseline (123 tracked paths at merge). Protected `main` is again a usable public source tree; further work should still land through reviewed branches rather than direct main edits.
 - The development host runs Windows.
 - Rust `1.96.0`, Cargo `1.96.0`, Git `2.51.1.windows.1`, CMake, and Ninja were present on `PATH` during the initial scout.
 - Windows reported an AMD Radeon integrated GPU and an NVIDIA GeForce RTX 5070 Ti. Windows PnP currently marks the AMD adapter `CM_PROB_DISABLED`; NVIDIA reports `CM_PROB_NONE`.
@@ -81,7 +82,9 @@ This document records verified project state. Planned behavior belongs in the [R
 - Shared size-tagged native-plugin ABI v1 and v2 definitions with a matching C header. ABI v1 retains its response-only contract. ABI v2 accepts onset, transient, ten macro values, and eight external controller lanes and emits at most 24 finite commands plus bounded beat/take events.
 - Strict `.tvplugin` manifest discovery for the current platform without loading native code.
 - SHA-256 artifact identity displayed before approval and recomputed immediately before library loading. Approval is explicit and lasts only for the current run.
-- One repository-owned ABI-v1 Windows example plugin plus eight ABI-v2 Creative Suite profiles backed by one shared DLL: Beat Choreographer, Spectral Colorist, Zone Dancer, Camera Pilot, Particle Conductor, Transition DJ, MIDI Performance Mapper, and Ambient Auto-Director.
+- One repository-owned ABI-v1 Windows example plugin plus eighteen ABI-v2 Creative Suite profiles backed by one shared DLL: the original eight (Beat Choreographer, Spectral Colorist, Zone Dancer, Camera Pilot, Particle Conductor, Transition DJ, MIDI Performance Mapper, Ambient Auto-Director) plus Analog Fractal Pilot, Spectrum Sculptor, Onset Architect, Silence Gardener, Macro Weaver, Stereo Navigator, Pulse Drummer, Color Storm, Deck Juggler, and Ambient Orbit.
+- Fractal Reef 0.3 is an analog-rhythm Mandelbrot journey: music-gated dive cycles, six Mandelbrot waypoints, waveform-forced iterations, spectrum-sculpted constants, and a visible complex-plane scope trace. Automated WGSL validation passes; live musical acceptance remains open.
+- Sampled · Visual Fields presets (Pulse Trace, Spectrum Skyline, Radial Burst, Spectrogram City, Spectral Terrain, Wave Tunnel, Particle Ocean, Wireframe Terrain, Halo Spectrum, Atomic Orbits) were rewritten to v0.2 against the ten `Sample Images` references for higher visual fidelity. Automated WGSL validation passes for all ten; live side-by-side image matching remains open.
 - ABI-v2 commands route only through host-owned bounded setters for response, active-mode parameters, colors, camera, Zone Studio, Particle Forge, Performance Studio, and macros. MIDI CC 20–27 and localhost OSC plugin-input addresses supply eight external lanes. Only one native plugin is active at a time.
 - An optional `THEVISUALIZER_PLUGINS` directory override for focused discovery and packaging checks.
 - A guarded Windows x86_64 packaging script that builds the locked release workspace and stages a portable local-test archive under `dist`.
@@ -237,7 +240,7 @@ This document records verified project state. Planned behavior belongs in the [R
 
 ## Current gates
 
-1. Review and merge PR #1 so public `main` is no longer an empty initialize commit (merge still requires explicit approval).
+1. ~~Public `main` restored~~ via merged PR #1 (`42a0467`, 2026-07-31).
 2. ~~Expanded package smoke~~ recorded 2026-07-30 on the development host (checksums + launch). Remaining: live capture/visual pass from the fresh extract and clean-machine validation.
 3. Run an externally timestamped playback-to-display latency test and decide whether the default-device poll's unmeasured 0–1000 ms detection interval is acceptable.
 4. Enable the AMD display adapter outside TheVisualizer only when display disruption is acceptable, then rerun the forced WGSL probe; it is currently disabled by Windows with Code 22.
