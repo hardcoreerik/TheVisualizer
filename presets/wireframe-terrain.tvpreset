@@ -1,19 +1,21 @@
 //! format: 2
 //! id: thevisualizer.wireframe-terrain
 //! name: Wireframe Terrain
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: Grid|rows|Grid Rows|6.0|36.0|20.0
-//! parameter: Grid|columns|Grid Columns|6.0|48.0|26.0
-//! parameter: Terrain|height|Elevation|0.0|2.0|0.9
-//! parameter: Camera|perspective|Perspective|0.2|2.0|1.0
-//! parameter: Motion|flight|Grid Flight|-3.0|3.0|0.45
-//! parameter: Surface|line-width|Line Width|0.3|3.0|1.0
-//! parameter: Color|phase|Grid Phase|-1.0|1.0|0.0
-//! parameter: Surface|horizon-glow|Horizon Glow|0.0|3.0|1.2
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.1
+//! parameter: Audio|response|Response|0.4|5.0|1.9
+//! parameter: Grid|rows|Grid Rows|16.0|64.0|36.0
+//! parameter: Grid|cols|Grid Columns|16.0|64.0|40.0
+//! parameter: Terrain|height|Elevation|0.3|2.5|1.25
+//! parameter: Camera|perspective|Perspective|0.3|1.5|0.85
+//! parameter: Motion|flight|Flight|-2.0|2.0|0.4
+//! parameter: Surface|width|Line Width|0.3|3.0|1.15
+//! parameter: Color|mix|Green-Cyan Mix|0.0|1.0|0.5
+//! parameter: Surface|glow|Line Glow|0.0|3.0|1.35
+//! parameter: Surface|horizon|Horizon Glow|0.0|2.0|0.7
+//! parameter: Surface|fog|Depth Fog|0.0|2.0|0.75
+//! parameter: Surface|exposure|Exposure|0.3|3.0|1.25
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
@@ -25,37 +27,94 @@ struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;
 struct ModeParameters { values: array<f32, 40> }
 @group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
 struct SpectrumHistory { values: array<f32, 8192> }
 @group(0) @binding(5) var<storage, read> history: SpectrumHistory;
+
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 1e-6)); }
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn tonemap(c: vec3f, e: f32) -> vec3f { return 1.0 - exp(-max(c, vec3f(0.0)) * e); }
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.8);
+}
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+fn hist(row: u32, col: u32) -> f32 {
+    let r = min(row, 127u);
+    let c = min(col, 63u);
+    return history.values[r * 64u + c];
+}
+
+fn elev(u: f32, v: f32) -> f32 {
+    let col = min(u32(clamp(u, 0.0, 0.999) * 64.0), 63u);
+    let row = min(u32(clamp(v, 0.0, 0.999) * 64.0), 63u);
+    let e = hist(row, col) * controls.values[0] * uniforms.gain;
+    let live = band(col) * (1.0 - v * 0.5);
+    return (e * 0.7 + live * 0.5) * controls.values[3];
+}
 @fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let res = max(uniforms.resolution, vec2f(1.0));
-    let uv = p.xy / res;
-    let depth = clamp((uv.y - 0.24) / 0.76, 0.0, 0.999);
-    let spread = mix(0.16, controls.values[4], depth);
-    let sx = clamp((uv.x - 0.5) / max(spread, 0.05) + 0.5, 0.0, 0.999);
-    let scroll = fract(depth + uniforms.time * controls.values[5] * 0.025);
-    let rows = max(u32(extras.history_rows), 1u);
-    let row = min(u32((1.0 - scroll) * f32(rows)), rows - 1u);
-    let band = min(u32(sx * 64.0), 63u);
-    let energy = clamp(history.values[row * 64u + band] * controls.values[0] * uniforms.gain, 0.0, 1.5);
-    let elevation = energy * controls.values[3] * (0.02 + depth * 0.12);
-    let warped_y = depth - elevation;
-    let width = 0.035 * controls.values[6];
-    let rows_line = glow(abs(fract(warped_y * controls.values[1]) - 0.5), width);
-    let cols_line = glow(abs(fract(sx * controls.values[2]) - 0.5), width);
-    let mask = step(0.22, uv.y);
-    let horizon = glow(abs(uv.y - 0.25 - uniforms.audio.x * 0.025), 0.008 + extras.onset * 0.006) * controls.values[8];
-    let phase = clamp(depth + energy * 0.35 + controls.values[7] * 0.2, 0.0, 1.0);
-    var color = routed(88u) * 0.1;
-    color += mix(routed(76u), routed(84u), phase) * (rows_line + cols_line * 0.72) * mask * (0.28 + energy);
-    color += routed(72u) * horizon * (0.4 + extras.transient);
-    color += routed(80u) * rows_line * cols_line * 0.3;
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    let uv = (p.xy * 2.0 - res) / res.y;
+    let rows = u32(controls.values[1]);
+    let cols = controls.values[2];
+    let flight = uniforms.time * controls.values[5] * 0.15;
+    var color = vec3f(0.0);
+    for (var row = 0u; row < 64u; row += 1u) {
+        if row < rows {
+            let z = f32(row) / f32(rows);
+            let depth = mix(0.4, 3.2, z) * controls.values[4];
+            let scale = 1.35 / depth;
+            let y_base = -0.65 + z * 0.5;
+            let fade = exp(-z * controls.values[10] * 1.6);
+            // Horizontal grid line (row)
+            let u01 = clamp(uv.x / scale * 0.4 + 0.5, 0.0, 0.999);
+            let h = elev(u01, fract(z + flight)) * scale * 0.5;
+            let y_line = y_base + h;
+            let w = controls.values[6] * 0.0035 * (1.0 + z);
+            let hline = glow(abs(uv.y - y_line), w);
+            // Verticals along this row
+            var vlines = 0.0;
+            let vcount = u32(cols);
+            for (var c = 0u; c < 64u; c += 1u) {
+                if c < vcount {
+                    let cu = (f32(c) + 0.5) / cols;
+                    let x = (cu - 0.5) * 2.5 * scale;
+                    let he = elev(cu, fract(z + flight)) * scale * 0.5;
+                    let y1 = y_base + he;
+                    // next row for vertical segment
+                    let z2 = f32(row + 1u) / f32(rows);
+                    let scale2 = 1.35 / (mix(0.4, 3.2, z2) * controls.values[4]);
+                    let y_base2 = -0.65 + z2 * 0.5;
+                    let he2 = elev(cu, fract(z2 + flight)) * scale2 * 0.5;
+                    let y2 = y_base2 + he2;
+                    let x2 = (cu - 0.5) * 2.5 * scale2;
+                    // distance to segment
+                    let a = vec2f(x, y1);
+                    let b = vec2f(x2, y2);
+                    let pa = uv - a;
+                    let ba = b - a;
+                    let hseg = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+                    vlines += glow(length(pa - ba * hseg), w * 1.1);
+                }
+            }
+            let colr = mix(vec3f(0.15, 1.0, 0.25), vec3f(0.0, 0.95, 1.0), controls.values[7] * z + (1.0 - controls.values[7]) * (1.0 - z));
+            color += colr * hline * controls.values[8] * fade;
+            color += colr * vlines * 0.55 * fade;
+        }
+    }
+    color += mix(vec3f(0.2, 1.0, 0.4), vec3f(0.0, 0.9, 1.0), controls.values[7]) * glow(uv.y + 0.2, 0.15) * controls.values[9] * 0.15;
+    color = tonemap(color, controls.values[11]);
     return vec4f(color, 1.0);
 }

@@ -1,19 +1,21 @@
 //! format: 2
 //! id: thevisualizer.spectral-terrain
 //! name: Spectral Terrain
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: Terrain|height|Peak Height|0.1|2.0|0.85
-//! parameter: Terrain|rows|Terrain Rows|6.0|32.0|18.0
-//! parameter: Terrain|columns|Grid Columns|6.0|48.0|24.0
-//! parameter: Camera|perspective|Perspective|0.2|2.0|1.0
-//! parameter: Motion|flight|Forward Flight|-3.0|3.0|0.35
-//! parameter: Surface|wireframe|Wireframe|0.0|2.0|0.8
-//! parameter: Color|phase|Elevation Phase|-1.0|1.0|0.0
-//! parameter: Surface|fog|Distance Fog|0.0|2.0|0.9
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.05
+//! parameter: Audio|response|Response|0.4|5.0|1.9
+//! parameter: Terrain|height|Peak Height|0.3|2.5|1.35
+//! parameter: Terrain|rows|Depth Rows|12.0|48.0|28.0
+//! parameter: Terrain|cols|Ridge Columns|16.0|64.0|40.0
+//! parameter: Camera|pitch|Pitch|0.2|1.2|0.62
+//! parameter: Camera|yaw|Yaw|-1.0|1.0|0.18
+//! parameter: Motion|scroll|Terrain Scroll|-2.0|2.0|0.35
+//! parameter: Surface|mesh|Mesh Opacity|0.0|2.0|1.1
+//! parameter: Surface|fill|Volume Fill|0.0|2.0|0.85
+//! parameter: Color|cyan|Cyan Shift|0.0|1.0|0.55
+//! parameter: Surface|fog|Distance Fog|0.0|2.0|0.8
+//! parameter: Surface|exposure|Exposure|0.3|3.0|1.25
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
@@ -25,36 +27,87 @@ struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;
 struct ModeParameters { values: array<f32, 40> }
 @group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
 struct SpectrumHistory { values: array<f32, 8192> }
 @group(0) @binding(5) var<storage, read> history: SpectrumHistory;
+
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 1e-6)); }
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn tonemap(c: vec3f, e: f32) -> vec3f { return 1.0 - exp(-max(c, vec3f(0.0)) * e); }
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.8);
+}
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+fn hist(row: u32, col: u32) -> f32 {
+    let r = min(row, 127u);
+    let c = min(col, 63u);
+    return history.values[r * 64u + c];
+}
+
+fn height_field(u: f32, v: f32) -> f32 {
+    let col = min(u32(clamp(u, 0.0, 0.999) * 64.0), 63u);
+    let row = min(u32(clamp(v, 0.0, 0.999) * 64.0), 63u);
+    let e = hist(row, col) * controls.values[0] * uniforms.gain;
+    let live = band(col) * (1.0 - v * 0.65);
+    let n = hash21(vec2f(floor(u * 32.0), floor(v * 24.0)));
+    return (e * 0.75 + live * 0.55 + n * 0.08) * controls.values[1];
+}
 @fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let res = max(uniforms.resolution, vec2f(1.0));
-    let uv = p.xy / res;
-    let depth = clamp((uv.y - 0.12) / 0.88, 0.0, 0.999);
-    let spread = mix(0.22, controls.values[4], depth);
-    let sx = clamp((uv.x - 0.5) / max(spread, 0.05) + 0.5, 0.0, 0.999);
-    let scroll = fract(depth + uniforms.time * controls.values[5] * 0.02);
-    let rows = max(u32(extras.history_rows), 1u);
-    let row = min(u32((1.0 - scroll) * f32(rows)), rows - 1u);
-    let band = min(u32(sx * 64.0), 63u);
-    let energy = clamp(history.values[row * 64u + band] * controls.values[0] * uniforms.gain, 0.0, 1.5);
-    let ridge_y = 0.84 - depth * 0.58 - energy * controls.values[1] * (0.025 + depth * 0.12);
-    let row_phase = fract(depth * controls.values[2] + uniforms.time * controls.values[5] * 0.15);
-    let row_line = glow(abs(fract((uv.y - ridge_y) * controls.values[2]) - 0.5), 0.055);
-    let column_line = glow(abs(fract(sx * controls.values[3]) - 0.5), 0.06);
-    let surface = step(ridge_y, uv.y) * (0.22 + energy * 0.65);
-    let wire = (row_line + column_line * 0.6) * controls.values[6];
-    let phase = clamp(energy * 0.7 + depth * 0.3 + controls.values[7] * 0.15, 0.0, 1.0);
-    var color = mix(routed(76u), routed(84u), phase) * (surface * 0.35 + wire);
-    color += routed(72u) * glow(abs(uv.y - ridge_y), 0.006) * (0.5 + extras.onset);
-    color = mix(color, routed(88u) * 0.15, clamp((1.0 - depth) * controls.values[8] * 0.45, 0.0, 0.75));
-    color += routed(80u) * row_phase * 0.015;
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    let uv = (p.xy * 2.0 - res) / res.y;
+    // Perspective plane
+    let yaw = controls.values[5];
+    let pitch = controls.values[4];
+    let ro = vec3f(0.0, 0.55, -1.15);
+    let rd = normalize(vec3f(uv.x + yaw, uv.y * 0.85 + 0.1, pitch));
+    // Ray-plane y = h approx via projected grid
+    let t_hit = (0.05 - ro.y) / min(rd.y, -0.05);
+    let hit = ro + rd * clamp(t_hit, 0.1, 8.0);
+    let scroll = uniforms.time * controls.values[6] * 0.12;
+    let gu = fract(hit.x * 0.45 + 0.5 + yaw * 0.1);
+    let gv = fract(hit.z * 0.35 + scroll);
+    let h = height_field(gu, gv);
+    // Project mountain silhouette: for each screen x, march depth rows
+    var color = vec3f(0.0);
+    let rows = u32(controls.values[2]);
+    let cols = controls.values[3];
+    for (var row = 0u; row < 48u; row += 1u) {
+        if row < rows {
+            let z = f32(row) / f32(rows);
+            let depth = mix(0.35, 2.8, z);
+            let scale = 1.2 / depth;
+            let y0 = -0.55 + z * 0.55;
+            let xw = uv.x / scale + controls.values[5] * 0.4;
+            let u01 = clamp(xw * 0.35 + 0.5, 0.0, 0.999);
+            let col = min(u32(u01 * cols), 63u);
+            let elev = height_field(u01, z) * scale * 0.55;
+            let ridge = y0 + elev;
+            // Soft filled volume under ridge
+            let under = smoothstep(ridge + 0.02, ridge - 0.08, uv.y);
+            let edge = glow(abs(uv.y - ridge), 0.004 + z * 0.002);
+            let mesh_u = abs(fract(u01 * cols) - 0.5);
+            let mesh_v = abs(fract(z * f32(rows) * 0.5) - 0.5);
+            let grid = (glow(mesh_u, 0.02) + glow(mesh_v, 0.03)) * controls.values[7] * 0.25;
+            let fade = exp(-z * controls.values[10] * 1.8);
+            let colr = mix(vec3f(0.05, 0.25, 1.0), vec3f(0.0, 0.95, 1.0), controls.values[9] * (1.0 - z));
+            color += colr * under * controls.values[8] * 0.08 * fade;
+            color += colr * edge * (0.55 + elev * 2.0) * fade;
+            color += colr * grid * under * fade;
+        }
+    }
+    color = tonemap(color, controls.values[11]);
     return vec4f(color, 1.0);
 }

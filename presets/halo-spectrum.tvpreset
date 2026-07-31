@@ -1,59 +1,102 @@
 //! format: 2
 //! id: thevisualizer.halo-spectrum
 //! name: Halo Spectrum
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: Halo|radius|Halo Radius|0.12|0.75|0.36
-//! parameter: Halo|bars|Spectrum Bars|16.0|96.0|64.0
-//! parameter: Halo|bar-length|Bar Length|0.1|1.5|0.65
-//! parameter: Waveform|waveform|Center Waveform|0.0|2.0|0.9
-//! parameter: Motion|rotation|Rotation|-3.0|3.0|0.08
-//! parameter: Surface|reflection|Reflection|0.0|1.5|0.55
-//! parameter: Color|rainbow|Rainbow Phase|-1.0|1.0|0.0
-//! parameter: Surface|bloom|Bloom|0.0|4.0|1.6
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.1
+//! parameter: Audio|response|Response|0.4|5.0|1.95
+//! parameter: Halo|radius|Halo Radius|0.15|0.65|0.32
+//! parameter: Halo|bars|Outer Bars|24.0|96.0|56.0
+//! parameter: Halo|bar-length|Bar Length|0.15|1.5|0.75
+//! parameter: Waveform|wave|Waveform Gain|0.2|2.5|1.15
+//! parameter: Motion|rotation|Rotation|-2.0|2.0|0.1
+//! parameter: Surface|reflection|Reflection|0.0|1.5|0.9
+//! parameter: Color|spread|Rainbow Spread|0.5|2.0|1.1
+//! parameter: Surface|bloom|Bloom|0.0|4.0|1.7
+//! parameter: Surface|side-eq|Side EQ Height|0.2|1.5|0.85
+//! parameter: Surface|exposure|Exposure|0.3|3.0|1.25
+//! parameter: Surface|floor|Floor Mirror|0.0|1.5|0.8
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
 struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
 @group(0) @binding(1) var<storage, read> features: AudioFeatures;
-struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32, history_rows: f32, history_bands: f32 }
 @group(0) @binding(2) var<uniform> extras: FrameExtras;
 struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;
 struct ModeParameters { values: array<f32, 40> }
 @group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
+
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 1e-6)); }
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+fn tonemap(c: vec3f, e: f32) -> vec3f { return 1.0 - exp(-max(c, vec3f(0.0)) * e); }
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.8);
+}
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+
 @fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let res = max(uniforms.resolution, vec2f(1.0));
     let uv = (p.xy * 2.0 - res) / res.y;
-    let radius = length(uv);
-    let angle = atan2(uv.y, uv.x) + uniforms.time * controls.values[5];
-    let phase = fract(angle / 6.2831853 + 0.5);
-    let source = min(u32(phase * 64.0), 63u);
-    let energy = clamp(features.spectrum[source] * controls.values[0] * uniforms.gain, 0.0, 1.5);
-    let base = controls.values[1] + energy * 0.025;
-    let bars = pow(max(0.0, cos(angle * controls.values[2] * 0.5)), 24.0);
-    let end = base + 0.025 + energy * controls.values[3] * 0.3;
-    let rays = bars * step(base, radius) * step(radius, end);
-    let halo = glow(abs(radius - base), 0.007 + energy * 0.004);
-    let x = clamp(uv.x / (res.x / res.y) * 0.5 + 0.5, 0.0, 0.999);
-    let wi = min(u32(x * 256.0), 255u);
-    let wave_y = features.waveform[wi] * controls.values[0] * controls.values[4] * 0.18;
-    let wave = glow(abs(uv.y - wave_y), 0.006) * step(abs(uv.x), res.x / res.y * 0.46);
-    let reflected = glow(abs(uv.y + 0.72 + wave_y * 0.3), 0.016) * controls.values[6] * 0.28;
-    let chroma = fract(phase + controls.values[7] * 0.2);
-    var color = routed(88u) * 0.1;
-    color += mix(routed(76u), routed(84u), chroma) * rays * (0.35 + energy);
-    color += routed(80u) * (halo + wave) * (0.7 + extras.transient);
-    color += routed(72u) * (reflected + halo * halo * controls.values[8] * 0.14);
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    let aspect = res.x / res.y;
+    let r = length(uv);
+    let ang = atan2(uv.y, uv.x) + uniforms.time * controls.values[5];
+    let phase = fract(ang / 6.2831853 + 0.5);
+    let src = min(u32(phase * 64.0), 63u);
+    let energy = band(src);
+    let base = controls.values[1];
+    // Segmented circular bars
+    let spokes = controls.values[2];
+    let spoke_f = fract(phase * spokes);
+    let spoke_m = step(0.18, spoke_f) * step(spoke_f, 0.82);
+    let end = base + 0.03 + energy * controls.values[3] * 0.4;
+    let ring_bar = spoke_m * step(base, r) * step(r, end);
+    let halo = glow(abs(r - base), 0.007 + energy * 0.005);
+    // Rainbow around circle
+    let hue = fract(phase * controls.values[7] + 0.05);
+    let rain = hsv(hue, 0.95, 1.0);
+    // Horizontal waveform through center
+    let x01 = clamp(uv.x / aspect * 0.5 + 0.5, 0.0, 0.999);
+    let wy = wave_at(x01) * controls.values[4] * controls.values[0] * 0.22;
+    let wave = glow(abs(uv.y - wy), 0.005) * smoothstep(aspect * 0.48, aspect * 0.35, abs(uv.x));
+    // Side EQ bars (left magenta, right green) like reference
+    let side_x = abs(uv.x);
+    let eq_zone = step(0.55, side_x) * step(side_x, aspect * 0.48);
+    let eq_cell = floor((uv.x / aspect * 0.5 + 0.5) * 48.0);
+    let eq_src = min(u32(abs(eq_cell) % 64), 63u);
+    let eq_e = band(eq_src) * controls.values[9];
+    let eq_top = eq_e * 0.45;
+    let eq_bar = eq_zone * step(abs(uv.y), eq_top) * step(0.2, fract((uv.x / aspect * 0.5 + 0.5) * 48.0));
+    let side_col = select(vec3f(1.0, 0.1, 0.9), vec3f(0.2, 1.0, 0.25), uv.x > 0.0);
+    var color = rain * ring_bar * (0.65 + energy);
+    color += rain * halo * 1.3;
+    color += mix(vec3f(1.0, 0.2, 0.9), vec3f(0.2, 1.0, 0.5), x01) * wave * 1.2;
+    color += side_col * eq_bar * 0.85;
+    // Inner radial ticks
+    color += rain * pow(max(0.0, cos(ang * 48.0)), 20.0) * step(r, base) * step(base * 0.55, r) * 0.35;
+    // Floor reflection
+    if uv.y < -0.05 {
+        let ru = vec2f(uv.x, -uv.y - 0.1);
+        let rr = length(ru);
+        let refl = glow(abs(rr - base), 0.02) * controls.values[11] * 0.35;
+        color += rain * refl * exp(uv.y * 2.0);
+        color += side_col * eq_zone * step(abs(ru.y), eq_top) * controls.values[6] * 0.25 * exp(uv.y * 3.0);
+    }
+    color += rain * ring_bar * ring_bar * controls.values[8] * 0.15;
+    color = tonemap(color, controls.values[10]);
     return vec4f(color, 1.0);
 }

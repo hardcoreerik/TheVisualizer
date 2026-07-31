@@ -1,64 +1,95 @@
 //! format: 2
 //! id: thevisualizer.pulse-trace
 //! name: Pulse Trace
-//! version: 0.1.0
+//! version: 0.2.0
 //! author: TheVisualizer
 //! license: Apache-2.0
-//! parameter: Audio|response|Response|0.4|5.0|1.8
-//! parameter: Trace|amplitude|Amplitude|0.1|2.0|0.75
-//! parameter: Trace|layers|Echo Layers|2.0|16.0|9.0
-//! parameter: Trace|width|Line Width|0.3|4.0|1.2
-//! parameter: Motion|drift|Layer Drift|-3.0|3.0|0.35
-//! parameter: Motion|scan-speed|Scan Speed|-4.0|4.0|0.8
-//! parameter: Grid|grid|Signal Grid|0.0|1.0|0.22
-//! parameter: Color|phase|Color Phase|-1.0|1.0|0.0
-//! parameter: Surface|afterglow|Afterglow|0.0|3.0|1.25
-//! parameter: Surface|exposure|Exposure|0.2|3.0|1.15
+//! parameter: Audio|response|Response|0.4|5.0|2.0
+//! parameter: Trace|amplitude|Amplitude|0.2|2.5|1.05
+//! parameter: Trace|layers|Echo Layers|4.0|24.0|14.0
+//! parameter: Trace|width|Core Width|0.3|5.0|1.6
+//! parameter: Trace|bloom|Vertical Bloom|0.0|4.0|1.85
+//! parameter: Motion|drift|Layer Drift|-2.0|2.0|0.22
+//! parameter: Motion|scan|Scan Motion|-3.0|3.0|0.45
+//! parameter: Color|green|Phosphor Green|0.5|1.5|1.0
+//! parameter: Surface|afterglow|Afterglow|0.0|3.0|1.4
+//! parameter: Surface|exposure|Exposure|0.3|3.0|1.35
+//! parameter: Surface|vignette|Vignette|0.0|2.0|0.55
+//! parameter: Trace|ghost|Ghost Density|0.0|2.0|1.15
 //! ---
 struct PresetUniforms { resolution: vec2f, time: f32, gain: f32, audio: vec4f }
 @group(0) @binding(0) var<uniform> uniforms: PresetUniforms;
 struct AudioFeatures { waveform: array<f32, 256>, spectrum: array<f32, 64> }
 @group(0) @binding(1) var<storage, read> features: AudioFeatures;
-struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32 }
+struct FrameExtras { delta: f32, peak: f32, waveform_len: f32, spectrum_len: f32, onset: f32, transient: f32, history_rows: f32, history_bands: f32 }
 @group(0) @binding(2) var<uniform> extras: FrameExtras;
 struct SceneState { values: array<f32, 96> }
 @group(0) @binding(3) var<storage, read> scene: SceneState;
 struct ModeParameters { values: array<f32, 40> }
 @group(0) @binding(4) var<storage, read> controls: ModeParameters;
+
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let v = array(vec2f(-1.0, -3.0), vec2f(3.0, 1.0), vec2f(-1.0, 1.0));
     return vec4f(v[i], 0.0, 1.0);
 }
-fn routed(o: u32) -> vec3f { return vec3f(scene.values[o], scene.values[o + 1u], scene.values[o + 2u]); }
-fn line_glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 0.000001)); }
-fn wave(x: f32) -> f32 {
-    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
-    return features.waveform[i] * controls.values[0] * controls.values[1];
+
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn glow(d: f32, w: f32) -> f32 { return exp(-d * d / max(w * w, 1e-6)); }
+fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+    let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+    return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
 }
+fn tonemap(c: vec3f, e: f32) -> vec3f { return 1.0 - exp(-max(c, vec3f(0.0)) * e); }
+fn band(i: u32) -> f32 {
+    return clamp(features.spectrum[min(i, 63u)] * uniforms.gain * controls.values[0], 0.0, 1.8);
+}
+fn wave_at(x: f32) -> f32 {
+    let i = min(u32(clamp(x, 0.0, 0.999) * 256.0), 255u);
+    return features.waveform[i];
+}
+
 @fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let res = max(uniforms.resolution, vec2f(1.0));
     let uv = (p.xy * 2.0 - res) / res.y;
-    let x = clamp(uv.x / (res.x / res.y) * 0.5 + 0.5, 0.0, 0.999);
-    let width = controls.values[3] / res.y * 2.5;
-    let count = u32(controls.values[2]);
+    let aspect = res.x / res.y;
+    let x01 = clamp(uv.x / aspect * 0.5 + 0.5, 0.0, 0.999);
+    let amp = controls.values[1] * (0.55 + uniforms.audio.w * 0.55 + extras.peak * 0.35);
+    let layers = u32(controls.values[2]);
+    let core_w = controls.values[3] * 0.0028;
     var light = 0.0;
-    var hue = 0.0;
-    for (var layer = 0u; layer < 16u; layer += 1u) {
-        if layer < count {
-            let f = f32(layer);
-            let offset = (f - f32(count - 1u) * 0.5) * 0.095;
-            let drift = sin(uv.x * (2.0 + f * 0.17) + uniforms.time * controls.values[4] + f) * 0.025;
-            let delayed = fract(x + f * 0.011 + uniforms.time * controls.values[5] * 0.003);
-            let energy = line_glow(abs(uv.y - offset - wave(delayed) * (1.0 - f * 0.025) - drift), width * (1.0 + f * 0.13));
-            light += energy * (1.0 - f / 20.0);
-            hue += energy * f / max(f32(count), 1.0);
+    var core = 0.0;
+    // Primary waveform + stacked phosphor ghosts matching the reference.
+    for (var L = 0u; L < 24u; L += 1u) {
+        if L < layers {
+            let f = f32(L);
+            let t = f / max(f32(layers - 1u), 1.0);
+            let fade = mix(1.0, 0.12, t) * mix(1.0, 0.55, controls.values[11] * t);
+            let drift = sin(x01 * 6.283 * (1.0 + f * 0.07) + uniforms.time * controls.values[5] + f) * 0.012 * controls.values[5];
+            let scan = uniforms.time * controls.values[6] * 0.15;
+            let sample_x = fract(x01 + scan * 0.02 + f * 0.003);
+            let y = wave_at(sample_x) * amp * (1.0 - t * 0.35) + drift + (f - f32(layers) * 0.5) * 0.008 * controls.values[11];
+            let d = abs(uv.y - y);
+            let line = glow(d, core_w * (1.0 + t * 2.5));
+            let soft = glow(d, core_w * (4.0 + t * 10.0)) * 0.35;
+            // Vertical bloom streaks like the reference phosphor glow.
+            let streak = exp(-abs(uv.y - y) * (8.0 + t * 20.0)) * exp(-abs(uv.x) * 0.15) * controls.values[4] * 0.08;
+            light += (soft + streak) * fade;
+            if L == 0u { core += line * 2.4; }
+            else { light += line * fade * 0.55; }
         }
     }
-    let grid = (line_glow(abs(fract(x * 12.0) - 0.5), 0.018) + line_glow(abs(fract((uv.y + 1.0) * 6.0) - 0.5), 0.018)) * controls.values[6];
-    let pulse = 0.8 + extras.transient * 0.8 + extras.onset * 0.35;
-    var color = routed(88u) * 0.12 + routed(80u) * grid * 0.06;
-    color += mix(routed(76u), routed(84u), clamp(hue + controls.values[7] * 0.5, 0.0, 1.0)) * light * pulse;
-    color += routed(72u) * light * light * controls.values[8] * 0.18;
-    color = 1.0 - exp(-max(color, vec3f(0.0)) * controls.values[9]);
+    // Secondary high-frequency hash for dense ghost traces.
+    for (var g = 0u; g < 8u; g += 1u) {
+        let gx = fract(x01 * 1.7 + f32(g) * 0.11 + uniforms.time * 0.03);
+        let gy = wave_at(gx) * amp * 0.55 + sin(gx * 40.0 + f32(g)) * 0.02 * controls.values[11];
+        light += glow(abs(uv.y - gy), core_w * 3.5) * 0.12 * controls.values[11];
+    }
+    let green = vec3f(0.05, 1.0, 0.22) * controls.values[7];
+    var color = green * (light * controls.values[8] * 0.55 + core);
+    color += green * core * core * 0.65;
+    color += vec3f(0.4, 1.0, 0.55) * core * 0.35;
+    let vig = 1.0 - smoothstep(0.55, 1.55, length(uv) * (0.55 + controls.values[10] * 0.4)) * controls.values[10] * 0.55;
+    color = tonemap(color, controls.values[9]) * vig;
     return vec4f(color, 1.0);
 }

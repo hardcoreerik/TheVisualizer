@@ -35,9 +35,15 @@ use control::{ControlEvent, ControlHub};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eframe::egui_wgpu::RenderState;
 use event_horizon::{EVENT_HORIZON_ID, EventHorizonVisual};
+
+const VALLEY_FLIGHT_ID: &str = "thevisualizer.pixel-valley-flight";
+/// Live host values written into mode_parameters for the valley shader (not UI sliders).
+const VALLEY_LIVE_SIDE: usize = 16;
+const VALLEY_LIVE_COUNT: usize = 17;
+const VALLEY_LIVE_STRENGTH: usize = 18;
 use forge_model::ForgeModel;
 use particle_forge::{
-    ForgeForceKind, ForgeFrame, ForgeQuality, ForgeSceneSource, ForgeTopology,
+    ForgeForceKind, ForgeFrame, ForgeMaterialMix, ForgeQuality, ForgeSceneSource, ForgeTopology,
     ParticleForgeRenderer, ParticleForgeState,
 };
 use performance::{MacroSource, PERFORMANCE_MACROS, PerformanceState, Transition};
@@ -225,6 +231,15 @@ impl SoundZone {
     }
 }
 
+/// Palette placement tool: pick a zone type, then click the visual to place it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ZonePlaceTool {
+    /// Normal select / drag / camera.
+    Idle,
+    /// Waiting for a click on the visual to drop a new zone.
+    Place,
+}
+
 struct InteractionState {
     zones: Vec<SoundZone>,
     selected: Option<usize>,
@@ -235,6 +250,12 @@ struct InteractionState {
     camera_pitch: f32,
     camera_zoom: f32,
     show_handles: bool,
+    /// Palette placement mode for adding zones by click.
+    zone_tool: ZonePlaceTool,
+    /// Kind chosen in the zone palette while placing.
+    place_kind: ZoneVisualKind,
+    /// Band chosen in the zone palette while placing.
+    place_band: ZoneBand,
 }
 
 impl Default for InteractionState {
@@ -249,6 +270,628 @@ impl Default for InteractionState {
             camera_pitch: 0.05,
             camera_zoom: 1.0,
             show_handles: true,
+            zone_tool: ZonePlaceTool::Idle,
+            place_kind: ZoneVisualKind::PulseTrace,
+            place_band: ZoneBand::Full,
+        }
+    }
+}
+
+/// Distinct Neon Scope render styles (cycled with ↑/↓ while Scope is active).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScopeStyle {
+    ClassicTrail,
+    DualMirror,
+    SpectrumRibbon,
+    CircularRadar,
+    Lissajous,
+    BarPulse,
+    DotMatrix,
+    FireTrace,
+    IceLattice,
+    BeatSpike,
+}
+
+impl ScopeStyle {
+    const ALL: [Self; 10] = [
+        Self::ClassicTrail,
+        Self::DualMirror,
+        Self::SpectrumRibbon,
+        Self::CircularRadar,
+        Self::Lissajous,
+        Self::BarPulse,
+        Self::DotMatrix,
+        Self::FireTrace,
+        Self::IceLattice,
+        Self::BeatSpike,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ClassicTrail => "Classic Trail",
+            Self::DualMirror => "Dual Mirror",
+            Self::SpectrumRibbon => "Spectrum Ribbon",
+            Self::CircularRadar => "Circular Radar",
+            Self::Lissajous => "Lissajous",
+            Self::BarPulse => "Bar Pulse",
+            Self::DotMatrix => "Dot Matrix",
+            Self::FireTrace => "Fire Trace",
+            Self::IceLattice => "Ice Lattice",
+            Self::BeatSpike => "Beat Spike",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|style| *style == self).unwrap_or(0)
+    }
+
+    fn from_index(index: usize) -> Self {
+        Self::ALL[index % Self::ALL.len()]
+    }
+
+    fn cycle(self, forward: bool) -> Self {
+        let len = Self::ALL.len();
+        let index = self.index();
+        let next = if forward {
+            (index + 1) % len
+        } else {
+            (index + len - 1) % len
+        };
+        Self::from_index(next)
+    }
+}
+
+/// One specialized Mode Controls slider for a particle physics mode.
+#[derive(Clone, Copy, Debug)]
+struct ParticleControlSpec {
+    label: &'static str,
+    min: f32,
+    max: f32,
+}
+
+/// Named Particle Forge physics modes (cycled with ↑/↓ while Particles is active).
+/// Index maps 1:1 to GPU `physics_mode` in particle_forge.wgsl.
+/// Methods: vortex, boids, gravity, Lorentz, curl, fountain,
+/// Spectral Form (Lucio-style 3D sound), spring mesh, fireworks, accretion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParticleStyle {
+    ParticleVortex,
+    BoidsSwarm,
+    GravityWells,
+    MagneticPlasma,
+    CurlNebula,
+    SpectrumFountain,
+    /// Lucio Arese–style 3D frequency particle manifold / spatial spectrogram.
+    SpectralForm,
+    SpringMesh,
+    FireworkBurst,
+    AccretionDisk,
+}
+
+impl ParticleStyle {
+    const ALL: [Self; 10] = [
+        Self::ParticleVortex,
+        Self::BoidsSwarm,
+        Self::GravityWells,
+        Self::MagneticPlasma,
+        Self::CurlNebula,
+        Self::SpectrumFountain,
+        Self::SpectralForm,
+        Self::SpringMesh,
+        Self::FireworkBurst,
+        Self::AccretionDisk,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ParticleVortex => "Particle Vortex",
+            Self::BoidsSwarm => "Boids Swarm",
+            Self::GravityWells => "Gravity Wells",
+            Self::MagneticPlasma => "Magnetic Plasma",
+            Self::CurlNebula => "Curl Nebula",
+            Self::SpectrumFountain => "Spectrum Fountain",
+            Self::SpectralForm => "Spectral Form",
+            Self::SpringMesh => "Spring Mesh",
+            Self::FireworkBurst => "Firework Burst",
+            Self::AccretionDisk => "Accretion Disk",
+        }
+    }
+
+    fn blurb(self) -> &'static str {
+        match self {
+            Self::ParticleVortex => "Original torus vortex — tangent drive + tube restore",
+            Self::BoidsSwarm => "Reynolds flocking: separation, alignment, cohesion",
+            Self::GravityWells => "Soft N-body wells pulled by spectrum mass",
+            Self::MagneticPlasma => "Lorentz F=q(E+v×B) plasma filaments",
+            Self::CurlNebula => "Incompressible curl-noise fluid smoke",
+            Self::SpectrumFountain => "Classic AV bar emitters with gravity",
+            Self::SpectralForm => "3D sound sculpture — frequency particles in layered networks",
+            Self::SpringMesh => "Spring mesh with beat-reactive mountain peaks",
+            Self::FireworkBurst => "Onset-triggered shell bursts + debris",
+            Self::AccretionDisk => "Kepler disk, frame-drag, polar jets",
+        }
+    }
+
+    fn physics_mode(self) -> f32 {
+        self.index() as f32
+    }
+
+    fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|style| *style == self)
+            .unwrap_or(0)
+    }
+
+    fn from_index(index: usize) -> Self {
+        Self::ALL[index % Self::ALL.len()]
+    }
+
+    fn cycle(self, forward: bool) -> Self {
+        let len = Self::ALL.len();
+        let index = self.index();
+        let next = if forward {
+            (index + 1) % len
+        } else {
+            (index + len - 1) % len
+        };
+        Self::from_index(next)
+    }
+
+    /// Eight specialized knobs for Mode Controls (label + range).
+    fn controls(self) -> [ParticleControlSpec; 8] {
+        match self {
+            Self::ParticleVortex => [
+                ParticleControlSpec { label: "Major radius", min: 0.5, max: 2.2 },
+                ParticleControlSpec { label: "Tube radius", min: 0.1, max: 0.9 },
+                ParticleControlSpec { label: "Swirl speed", min: 0.1, max: 2.5 },
+                ParticleControlSpec { label: "Tube tension", min: 0.05, max: 1.5 },
+                ParticleControlSpec { label: "Lift / bob", min: 0.0, max: 1.2 },
+                ParticleControlSpec { label: "Damping", min: 0.0, max: 1.0 },
+                ParticleControlSpec { label: "Bass drive", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Force node mix", min: 0.0, max: 2.0 },
+            ],
+            Self::BoidsSwarm => [
+                ParticleControlSpec { label: "Separation", min: 0.0, max: 3.0 },
+                ParticleControlSpec { label: "Alignment", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Cohesion", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Perception", min: 0.2, max: 2.5 },
+                ParticleControlSpec { label: "Max speed", min: 0.4, max: 3.5 },
+                ParticleControlSpec { label: "Onset scatter", min: 0.0, max: 3.0 },
+                ParticleControlSpec { label: "Center pull", min: 0.0, max: 1.5 },
+                ParticleControlSpec { label: "Mid climb", min: 0.0, max: 2.0 },
+            ],
+            Self::GravityWells => [
+                ParticleControlSpec { label: "Gravity G", min: 0.1, max: 2.5 },
+                ParticleControlSpec { label: "Softening", min: 0.05, max: 0.8 },
+                ParticleControlSpec { label: "Orbit boost", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Well spread", min: 0.4, max: 2.5 },
+                ParticleControlSpec { label: "Disk flatten", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Well count", min: 2.0, max: 8.0 },
+                ParticleControlSpec { label: "Reserved", min: 0.0, max: 1.0 },
+                ParticleControlSpec { label: "Bass mass", min: 0.0, max: 2.5 },
+            ],
+            Self::MagneticPlasma => [
+                ParticleControlSpec { label: "B field scale", min: 0.1, max: 3.0 },
+                ParticleControlSpec { label: "E field scale", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Charge mix", min: 0.0, max: 1.0 },
+                ParticleControlSpec { label: "Dipole strength", min: 0.2, max: 3.0 },
+                ParticleControlSpec { label: "Cyclotron", min: 0.2, max: 2.5 },
+                ParticleControlSpec { label: "Confinement", min: 0.0, max: 1.5 },
+                ParticleControlSpec { label: "Treble → B", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Bass → E", min: 0.0, max: 2.0 },
+            ],
+            Self::CurlNebula => [
+                ParticleControlSpec { label: "Noise scale", min: 0.3, max: 3.0 },
+                ParticleControlSpec { label: "Flow speed", min: 0.2, max: 3.0 },
+                ParticleControlSpec { label: "Octaves", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Confinement", min: 0.0, max: 1.5 },
+                ParticleControlSpec { label: "Swirl", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Rise", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Bass warp", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Fine detail", min: 0.0, max: 2.0 },
+            ],
+            Self::SpectrumFountain => [
+                ParticleControlSpec { label: "Gravity", min: 0.5, max: 6.0 },
+                ParticleControlSpec { label: "Emit power", min: 0.3, max: 4.0 },
+                ParticleControlSpec { label: "Spread", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Lifetime", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Bar width", min: 0.1, max: 1.5 },
+                ParticleControlSpec { label: "Forward lean", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Reserved", min: 0.0, max: 1.0 },
+                ParticleControlSpec { label: "Height gain", min: 0.5, max: 4.0 },
+            ],
+            Self::SpectralForm => [
+                ParticleControlSpec { label: "Amp spread", min: 0.2, max: 2.5 },
+                ParticleControlSpec { label: "Freq height", min: 0.5, max: 3.5 },
+                ParticleControlSpec { label: "Time scroll", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Spectrum spring", min: 0.5, max: 6.0 },
+                ParticleControlSpec { label: "History layers", min: 4.0, max: 48.0 },
+                ParticleControlSpec { label: "Rotate", min: -1.5, max: 1.5 },
+                ParticleControlSpec { label: "Network cohesion", min: 0.0, max: 2.5 },
+                ParticleControlSpec { label: "Beat bloom", min: 0.0, max: 3.0 },
+            ],
+            Self::SpringMesh => [
+                ParticleControlSpec { label: "Stiffness", min: 0.5, max: 12.0 },
+                ParticleControlSpec { label: "Rest length", min: 0.02, max: 0.2 },
+                ParticleControlSpec { label: "Mountain peaks", min: 0.0, max: 12.0 },
+                ParticleControlSpec { label: "Wave amplitude", min: 0.0, max: 3.0 },
+                ParticleControlSpec { label: "Wave speed", min: 0.2, max: 6.0 },
+                ParticleControlSpec { label: "Shear springs", min: 0.0, max: 1.5 },
+                ParticleControlSpec { label: "Mountain height", min: 0.0, max: 3.5 },
+                ParticleControlSpec { label: "Pin strength", min: 0.0, max: 3.0 },
+            ],
+            Self::FireworkBurst => [
+                ParticleControlSpec { label: "Blast power", min: 0.3, max: 4.0 },
+                ParticleControlSpec { label: "Gravity", min: 0.2, max: 4.0 },
+                ParticleControlSpec { label: "Air drag", min: 0.0, max: 1.0 },
+                ParticleControlSpec { label: "Spark spread", min: 0.2, max: 2.5 },
+                ParticleControlSpec { label: "Shell speed", min: 0.5, max: 4.0 },
+                ParticleControlSpec { label: "Recover / recycle", min: 0.1, max: 2.0 },
+                ParticleControlSpec { label: "Spin kick", min: 0.0, max: 2.0 },
+                ParticleControlSpec { label: "Event flash", min: 0.0, max: 3.0 },
+            ],
+            Self::AccretionDisk => [
+                ParticleControlSpec { label: "Central mass", min: 0.3, max: 3.0 },
+                ParticleControlSpec { label: "Frame drag", min: 0.1, max: 2.0 },
+                ParticleControlSpec { label: "Disk flatten", min: 0.2, max: 4.0 },
+                ParticleControlSpec { label: "Jet power", min: 0.0, max: 3.0 },
+                ParticleControlSpec { label: "Jet width", min: 0.05, max: 0.8 },
+                ParticleControlSpec { label: "ISCO radius", min: 0.15, max: 0.8 },
+                ParticleControlSpec { label: "Outer rim", min: 1.0, max: 3.5 },
+                ParticleControlSpec { label: "Bass feed", min: 0.0, max: 2.5 },
+            ],
+        }
+    }
+
+    fn default_params(self) -> [f32; 8] {
+        match self {
+            Self::ParticleVortex => [1.25, 0.42, 0.9, 0.55, 0.25, 0.2, 1.1, 1.0],
+            Self::BoidsSwarm => [1.4, 0.9, 0.85, 0.9, 1.6, 1.2, 0.25, 0.8],
+            Self::GravityWells => [1.0, 0.22, 0.9, 1.2, 0.8, 6.0, 0.0, 1.0],
+            Self::MagneticPlasma => [1.2, 0.7, 0.5, 1.4, 1.0, 0.35, 1.0, 1.0],
+            Self::CurlNebula => [1.1, 1.3, 1.5, 0.28, 0.45, 0.55, 0.8, 1.0],
+            Self::SpectrumFountain => [2.4, 1.6, 0.7, 0.8, 0.45, 0.6, 0.0, 2.0],
+            // spread, height, scroll, spring, layers, rotate, network, bloom
+            Self::SpectralForm => [1.15, 2.1, 0.85, 3.2, 24.0, 0.22, 0.9, 1.4],
+            // stiffness, rest, mountainPeaks, waveAmp, waveSpeed, shear, mountainHeight, pin
+            Self::SpringMesh => [5.5, 0.06, 5.0, 0.7, 2.5, 0.45, 1.75, 0.95],
+            Self::FireworkBurst => [1.6, 1.4, 0.35, 1.0, 1.8, 0.7, 0.6, 1.2],
+            Self::AccretionDisk => [1.2, 0.85, 1.6, 1.1, 0.22, 0.35, 2.2, 1.0],
+        }
+    }
+
+    fn apply(self, forge: &mut ParticleForgeState) {
+        use ForgeTopology::*;
+        // Preserve free-look once the user has orbited; mode defaults only apply first time.
+        let locked = forge.user_camera_locked;
+        let keep_yaw = forge.camera_yaw;
+        let keep_pitch = forge.camera_pitch;
+        let keep_zoom = forge.camera_zoom;
+
+        forge.source = ForgeSceneSource::Procedural;
+        forge.reverse = false;
+        // Manual orbit works the same on every mode — no auto-camera fight by default.
+        forge.auto_camera = false;
+        forge.physics_mode = self.physics_mode();
+        forge.mode_params = self.default_params();
+        forge.bump_reseed();
+        forge.event_envelope = 0.0;
+
+        let mut framing = |pitch: f32, zoom: f32, yaw: Option<f32>| {
+            if locked {
+                forge.camera_yaw = keep_yaw;
+                forge.camera_pitch = keep_pitch;
+                forge.camera_zoom = keep_zoom;
+            } else {
+                forge.camera_pitch = pitch;
+                forge.camera_zoom = zoom;
+                if let Some(y) = yaw {
+                    forge.camera_yaw = y;
+                }
+            }
+        };
+
+        match self {
+            Self::ParticleVortex => {
+                forge.topology = Ring;
+                forge.topology_morph = 0.1;
+                forge.spin = [0.12, 0.28, 0.08];
+                forge.twist = 0.35;
+                forge.precession = 0.18;
+                framing(0.35, 1.0, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.95,
+                    cyber: 0.15,
+                    cosmic: 0.15,
+                };
+            }
+            Self::BoidsSwarm => {
+                forge.topology = Sphere;
+                forge.topology_morph = 0.4;
+                forge.spin = [0.05, 0.15, 0.05];
+                forge.twist = 0.2;
+                forge.precession = 0.3;
+                framing(0.25, 0.95, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.75,
+                    cyber: 0.2,
+                    cosmic: 0.35,
+                };
+            }
+            Self::GravityWells => {
+                forge.topology = Sphere;
+                forge.topology_morph = 0.2;
+                forge.spin = [0.0, 0.2, 0.0];
+                forge.twist = 0.15;
+                forge.precession = 0.2;
+                framing(0.55, 0.9, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.4,
+                    cyber: 0.15,
+                    cosmic: 1.0,
+                };
+            }
+            Self::MagneticPlasma => {
+                forge.topology = Sphere;
+                forge.topology_morph = 0.5;
+                forge.spin = [0.2, 0.5, 0.15];
+                forge.twist = 0.5;
+                forge.precession = 0.45;
+                framing(0.2, 1.05, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.9,
+                    cyber: 1.0,
+                    cosmic: 0.3,
+                };
+            }
+            Self::CurlNebula => {
+                forge.topology = Sphere;
+                forge.topology_morph = 0.7;
+                forge.spin = [0.1, 0.2, 0.1];
+                forge.twist = 0.4;
+                forge.precession = 0.5;
+                framing(0.15, 1.1, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.85,
+                    cyber: 0.35,
+                    cosmic: 0.65,
+                };
+            }
+            Self::SpectrumFountain => {
+                forge.topology = Ring;
+                forge.topology_morph = 0.0;
+                forge.spin = [0.0, 0.0, 0.0];
+                forge.twist = 0.0;
+                forge.precession = 0.0;
+                framing(0.15, 0.85, Some(0.0));
+                forge.materials = ForgeMaterialMix {
+                    energy: 1.0,
+                    cyber: 0.25,
+                    cosmic: 0.15,
+                };
+            }
+            Self::SpectralForm => {
+                forge.topology = Sphere;
+                forge.topology_morph = 0.2;
+                forge.spin = [0.0, 0.15, 0.0];
+                forge.twist = 0.1;
+                forge.precession = 0.2;
+                framing(0.25, 1.05, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.95,
+                    cyber: 0.35,
+                    cosmic: 0.55,
+                };
+            }
+            Self::SpringMesh => {
+                forge.topology = Ring;
+                forge.topology_morph = 0.0;
+                forge.spin = [0.0, 0.0, 0.0];
+                forge.twist = 0.0;
+                forge.precession = 0.0;
+                framing(0.65, 0.9, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.35,
+                    cyber: 1.0,
+                    cosmic: 0.2,
+                };
+            }
+            Self::FireworkBurst => {
+                forge.topology = Core;
+                forge.topology_morph = 0.2;
+                forge.spin = [0.15, 0.15, 0.15];
+                forge.twist = 0.3;
+                forge.precession = 0.2;
+                forge.event_envelope = 0.5;
+                framing(0.2, 1.0, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 1.0,
+                    cyber: 0.4,
+                    cosmic: 0.25,
+                };
+            }
+            Self::AccretionDisk => {
+                forge.topology = Ring;
+                forge.topology_morph = 0.15;
+                forge.spin = [0.0, 0.4, 0.0];
+                forge.twist = 0.5;
+                forge.precession = 0.25;
+                framing(0.75, 0.95, None);
+                forge.materials = ForgeMaterialMix {
+                    energy: 0.7,
+                    cyber: 0.25,
+                    cosmic: 0.85,
+                };
+            }
+        }
+    }
+}
+
+/// Host-mode controls for Neon Scope (wired into the CPU scope painter).
+#[derive(Clone, Debug)]
+struct ScopeControls {
+    style: ScopeStyle,
+    response: f32,
+    amplitude: f32,
+    trail_layers: f32,
+    core_width: f32,
+    echo_width: f32,
+    bloom: f32,
+    grid: f32,
+    baseline: f32,
+    mirror: f32,
+    vertical_offset: f32,
+    scan: f32,
+    onset_bloom: f32,
+    trail_fade: f32,
+    smoothness: f32,
+}
+
+impl Default for ScopeControls {
+    fn default() -> Self {
+        Self {
+            style: ScopeStyle::ClassicTrail,
+            response: 2.2,
+            amplitude: 1.0,
+            trail_layers: 8.0,
+            core_width: 1.0,
+            echo_width: 1.0,
+            bloom: 1.15,
+            grid: 0.55,
+            baseline: 0.7,
+            mirror: 0.0,
+            vertical_offset: 0.0,
+            scan: 0.0,
+            onset_bloom: 1.0,
+            trail_fade: 1.0,
+            smoothness: 0.35,
+        }
+    }
+}
+
+/// 4-count left / 4-count right phrase for Hyperreal Valley Flight.
+/// Locks to the music via adaptive inter-onset tempo + phase-locked meter,
+/// then glides the plane side-to-side with light on-beat flight accents.
+#[derive(Clone, Debug)]
+struct ValleyPhraseBeat {
+    /// 0..=7 — counts 0–3 left, 4–7 right.
+    count: u8,
+    /// Smoothed lateral position in [-1, 1].
+    side_smooth: f32,
+    onset_high: bool,
+    cooldown: f32,
+    /// Running clock (seconds).
+    time: f32,
+    /// Last accepted beat time.
+    last_beat_time: f32,
+    /// Adaptive beat period (seconds); starts near 120 BPM.
+    period_ema: f32,
+    /// 0..1 phase within the current beat interval.
+    phase: f32,
+    /// Confidence in tempo lock [0, 1].
+    confidence: f32,
+    /// Decaying accent for light flight variations (not path jumps).
+    pulse: f32,
+}
+
+impl Default for ValleyPhraseBeat {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            side_smooth: -0.7,
+            onset_high: false,
+            cooldown: 0.0,
+            time: 0.0,
+            last_beat_time: -1.0,
+            period_ema: 0.5, // 120 BPM seed
+            phase: 0.0,
+            confidence: 0.0,
+            pulse: 0.0,
+        }
+    }
+}
+
+impl ValleyPhraseBeat {
+    fn update(&mut self, dt: f32, onset: f32, transient: f32, rms: f32, low: f32) {
+        let dt = dt.clamp(0.0, 0.1);
+        self.time += dt;
+        self.pulse = (self.pulse - dt * 5.5).max(0.0);
+        if self.cooldown > 0.0 {
+            self.cooldown = (self.cooldown - dt).max(0.0);
+        }
+
+        // Prefer true onsets; allow strong transients when energy is clearly musical.
+        let musical = rms > 0.035 && low > 0.02;
+        let rising = musical
+            && self.cooldown <= 0.0
+            && !self.onset_high
+            && (onset > 0.32 || (onset > 0.18 && transient > 0.1));
+        self.onset_high = onset > 0.16 || transient > 0.07;
+
+        if rising {
+            let ioi = if self.last_beat_time >= 0.0 {
+                self.time - self.last_beat_time
+            } else {
+                0.0
+            };
+            // Accept inter-onset intervals in a wide musical BPM range (~55–190).
+            if (0.28..=1.1).contains(&ioi) {
+                let alpha = if self.confidence > 0.45 { 0.28 } else { 0.42 };
+                self.period_ema = (self.period_ema * (1.0 - alpha) + ioi * alpha).clamp(0.3, 1.05);
+                self.confidence = (self.confidence + 0.18).min(1.0);
+            } else if ioi > 1.1 {
+                // Dropped bars — ease confidence, keep period.
+                self.confidence = (self.confidence - 0.12).max(0.0);
+            }
+            self.last_beat_time = self.time;
+            self.phase = 0.0;
+            self.advance_count(1.0);
+            self.cooldown = (self.period_ema * 0.32).clamp(0.1, 0.2);
+        } else if musical && self.period_ema > 0.25 {
+            // Phase-locked clock: keeps 1-2-3-4 going between detected hits.
+            let tempo_scale = 1.0 + (low - 0.15).clamp(-0.1, 0.15) * 0.15;
+            self.phase += dt / (self.period_ema * tempo_scale);
+            // If an onset is slightly early/late, pull phase gently without jumping sides.
+            if onset > 0.25 && self.phase > 0.72 {
+                self.phase = self.phase.mul_add(0.7, 0.3); // nudge toward 1.0
+            }
+            if self.phase >= 1.0 && self.cooldown <= 0.0 {
+                self.phase -= 1.0;
+                // Soft accent when the clock carries the beat without a hard onset.
+                self.advance_count(0.62 + self.confidence * 0.25);
+                self.cooldown = (self.period_ema * 0.28).clamp(0.08, 0.18);
+                self.confidence = (self.confidence - 0.02).max(0.15);
+            }
+        } else if rms < 0.02 {
+            // Quiet: hold phrase, decay confidence.
+            self.confidence = (self.confidence - dt * 0.25).max(0.0);
+            self.phase = 0.0;
+        }
+
+        // 1–4 left, 1–4 right.
+        let target = if self.count < 4 { -0.8 } else { 0.8 };
+        // Confident lock settles a bit faster; still glides, never snaps.
+        let rate = 2.6 + self.confidence * 1.4;
+        let follow = 1.0 - (-rate * dt).exp();
+        self.side_smooth += (target - self.side_smooth) * follow;
+    }
+
+    fn advance_count(&mut self, pulse: f32) {
+        self.count = (self.count + 1) % 8;
+        self.pulse = pulse.clamp(0.0, 1.0);
+    }
+
+    fn apply_live(&self, parameters: &mut [f32; PRESET_PARAMETER_FLOATS]) {
+        parameters[VALLEY_LIVE_SIDE] = self.side_smooth;
+        parameters[VALLEY_LIVE_COUNT] = f32::from(self.count);
+        // Beat accent for light flight variations (altitude, bank, exhaust).
+        parameters[VALLEY_LIVE_STRENGTH] = self.pulse;
+        // Extra live channels (unused by UI sliders).
+        if parameters.len() > 19 {
+            parameters[19] = self.phase;
+            parameters[20] = self.confidence;
+            parameters[21] = self.period_ema;
         }
     }
 }
@@ -302,17 +945,38 @@ impl InteractionState {
             camera_pitch: 0.05,
             camera_zoom: 1.0,
             show_handles: true,
+            zone_tool: ZonePlaceTool::Idle,
+            place_kind: ZoneVisualKind::PulseTrace,
+            place_band: ZoneBand::Full,
         }
     }
 
     fn add_zone(&mut self, position: Vec2) {
+        self.add_zone_of_kind(position, self.place_kind, self.place_band);
+    }
+
+    fn add_zone_of_kind(&mut self, position: Vec2, kind: ZoneVisualKind, band: ZoneBand) {
         if self.zones.len() == MAX_SOUND_ZONES {
             return;
         }
         let mut zone = SoundZone::new(position);
-        zone.kind = ZoneVisualKind::ALL[self.zones.len() % ZoneVisualKind::ALL.len()];
+        zone.kind = kind;
+        zone.band = band;
         self.zones.push(zone);
         self.selected = Some(self.zones.len() - 1);
+        self.zone_tool = ZonePlaceTool::Idle;
+    }
+
+    fn begin_place_zone(&mut self, kind: ZoneVisualKind) {
+        if self.zones.len() >= MAX_SOUND_ZONES {
+            return;
+        }
+        self.place_kind = kind;
+        self.zone_tool = ZonePlaceTool::Place;
+    }
+
+    fn cancel_place_zone(&mut self) {
+        self.zone_tool = ZonePlaceTool::Idle;
     }
 
     fn remove_selected(&mut self) {
@@ -900,10 +1564,13 @@ struct VisualizerApp {
     visual_history: VisualHistory,
     studio: StudioState,
     event_horizon: EventHorizonVisual,
+    valley_phrase: ValleyPhraseBeat,
     canvas: CanvasState,
     interaction: InteractionState,
     colors: ColorSystem,
     mode_parameters: [f32; PRESET_PARAMETER_FLOATS],
+    scope: ScopeControls,
+    particle_style: ParticleStyle,
     latency: LatencyStats,
     onset_stats: OnsetStats,
     frame_stats: FrameStats,
@@ -1019,6 +1686,10 @@ impl VisualizerApp {
         let gain = active_preset.map_or(2.2, |preset| preset.response.default);
         let mode_parameters =
             active_preset.map_or([0.0; PRESET_PARAMETER_FLOATS], preset_parameter_defaults);
+        let scope = ScopeControls {
+            response: gain,
+            ..ScopeControls::default()
+        };
         let plugin_directory = plugin_directory();
         let plugin_discovery = plugin::discover(&plugin_directory);
         let plugin_error =
@@ -1078,10 +1749,13 @@ impl VisualizerApp {
             visual_history: VisualHistory::default(),
             studio,
             event_horizon: EventHorizonVisual::default(),
+            valley_phrase: ValleyPhraseBeat::default(),
             canvas: CanvasState::default(),
             interaction: InteractionState::default(),
             colors: ColorSystem::default(),
             mode_parameters,
+            scope,
+            particle_style: ParticleStyle::SpectralForm,
             latency: LatencyStats::default(),
             onset_stats: OnsetStats::default(),
             frame_stats: FrameStats::default(),
@@ -1116,7 +1790,11 @@ impl VisualizerApp {
             zone_overlay_error,
             particle_forge_renderer,
             particle_forge_error,
-            particle_forge: ParticleForgeState::default(),
+            particle_forge: {
+                let mut forge = ParticleForgeState::default();
+                ParticleStyle::SpectralForm.apply(&mut forge);
+                forge
+            },
             performance,
             performance_renderers,
             controls: ControlHub::new(),
@@ -1374,12 +2052,98 @@ impl VisualizerApp {
         self.load_preset(next);
     }
 
+    fn cycle_scope(&mut self, forward: bool) {
+        self.scope.style = self.scope.style.cycle(forward);
+        self.scene_notice = Some(format!(
+            "Scope · {} ({}/{})",
+            self.scope.style.label(),
+            self.scope.style.index() + 1,
+            ScopeStyle::ALL.len()
+        ));
+    }
+
+    fn cycle_particle_style(&mut self, forward: bool) {
+        self.particle_style = self.particle_style.cycle(forward);
+        self.particle_style.apply(&mut self.particle_forge);
+        if let Some(renderer) = &self.particle_forge_renderer {
+            renderer.reseed_particles();
+        }
+        self.scene_notice = Some(format!(
+            "Particles · {} ({}/{})",
+            self.particle_style.label(),
+            self.particle_style.index() + 1,
+            ParticleStyle::ALL.len()
+        ));
+    }
+
+    /// Live overlay/instrument title for the active visual (updates as you cycle).
+    fn active_visual_label(&self) -> String {
+        match self.visual {
+            0 => format!(
+                "NEON SCOPE · {}",
+                self.scope.style.label().to_ascii_uppercase()
+            ),
+            1 => format!(
+                "PARTICLE FORGE · {}",
+                self.particle_style.label().to_ascii_uppercase()
+            ),
+            2 => self
+                .gpu_preset
+                .as_ref()
+                .and_then(|renderer| {
+                    self.presets
+                        .iter()
+                        .find(|preset| preset.id == renderer.active_id())
+                })
+                .map_or_else(
+                    || "GPU PRESET · NONE".to_owned(),
+                    |preset| format!("GPU PRESET · {}", preset.name.to_ascii_uppercase()),
+                ),
+            3 => "STUDIO · LIVING PHOTOGRAPH".to_owned(),
+            _ => "VISUAL CANVAS".to_owned(),
+        }
+    }
+
+    fn active_visual_subtitle(&self) -> Option<String> {
+        match self.visual {
+            0 => Some(format!(
+                "Scope {}/{} · ↑/↓ to change",
+                self.scope.style.index() + 1,
+                ScopeStyle::ALL.len()
+            )),
+            1 => Some(format!(
+                "Particle look {}/{} · GPU mode {} · ↑/↓ to change",
+                self.particle_style.index() + 1,
+                ParticleStyle::ALL.len(),
+                self.particle_forge.physics_mode as i32
+            )),
+            2 => {
+                let total = self.presets.len().max(1);
+                let index = self
+                    .gpu_preset
+                    .as_ref()
+                    .and_then(|renderer| {
+                        self.presets
+                            .iter()
+                            .position(|preset| preset.id == renderer.active_id())
+                    })
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                Some(format!("Preset {index}/{total} · ↑/↓ to change"))
+            }
+            _ => None,
+        }
+    }
+
     fn active_scene_identity(&self) -> Result<(String, String), String> {
         match self.visual {
-            0 => Ok(("host.neon-scope".to_owned(), "Neon Scope".to_owned())),
+            0 => Ok((
+                "host.neon-scope".to_owned(),
+                format!("Neon Scope · {}", self.scope.style.label()),
+            )),
             1 => Ok((
                 "host.particle-forge".to_owned(),
-                "Particle Forge".to_owned(),
+                format!("Particle Forge · {}", self.particle_style.label()),
             )),
             2 => {
                 let id = self
@@ -1624,6 +2388,9 @@ impl VisualizerApp {
             camera_pitch: snapshot.camera_pitch,
             camera_zoom: snapshot.camera_zoom,
             show_handles: snapshot.show_handles,
+            zone_tool: ZonePlaceTool::Idle,
+            place_kind: ZoneVisualKind::PulseTrace,
+            place_band: ZoneBand::Full,
         };
         if let Some(Ok(forge)) = restored_forge {
             self.particle_forge = forge;
@@ -2022,18 +2789,39 @@ impl VisualizerApp {
         }
         if let Some(visual) = direct_visual {
             self.visual = visual;
+            if self.visual == 1 {
+                self.particle_style.apply(&mut self.particle_forge);
+            }
         }
         if left {
             self.visual = (self.visual + VISUAL_NAMES.len() - 1) % VISUAL_NAMES.len();
+            if self.visual == 1 {
+                self.particle_style.apply(&mut self.particle_forge);
+            }
         }
         if right {
             self.visual = (self.visual + 1) % VISUAL_NAMES.len();
+            if self.visual == 1 {
+                self.particle_style.apply(&mut self.particle_forge);
+            }
         }
         if self.visual == 2 && up {
             self.cycle_preset(false);
         }
         if self.visual == 2 && down {
             self.cycle_preset(true);
+        }
+        if self.visual == 0 && up {
+            self.cycle_scope(false);
+        }
+        if self.visual == 0 && down {
+            self.cycle_scope(true);
+        }
+        if self.visual == 1 && up {
+            self.cycle_particle_style(false);
+        }
+        if self.visual == 1 && down {
+            self.cycle_particle_style(true);
         }
         if microphone {
             self.switch_default_source(SourceKind::Microphone);
@@ -2112,7 +2900,10 @@ impl VisualizerApp {
             self.set_presentation(ctx, self.presentation.toggle_fullscreen());
         }
         if escape {
-            if self.ai_studio_panel {
+            if self.interaction.zone_tool == ZonePlaceTool::Place {
+                self.interaction.cancel_place_zone();
+                self.scene_notice = Some("Zone placement cancelled".to_owned());
+            } else if self.ai_studio_panel {
                 self.ai_studio_panel = false;
             } else if self.visual_library_panel {
                 self.visual_library_panel = false;
@@ -2142,6 +2933,28 @@ impl VisualizerApp {
             return;
         }
         let pointer = response.interact_pointer_pos();
+
+        // Palette place tool: click the visual once to drop the chosen zone type.
+        if self.interaction.zone_tool == ZonePlaceTool::Place {
+            response.ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+            if response.clicked_by(egui::PointerButton::Primary)
+                && let Some(pointer) = pointer
+            {
+                let position = normalize_visual_position(rect, pointer);
+                let kind = self.interaction.place_kind;
+                let band = self.interaction.place_band;
+                self.interaction.add_zone_of_kind(position, kind, band);
+                self.scene_notice = Some(format!("Placed zone · {}", kind.label()));
+            }
+            // Don't select/drag while placing.
+            if response.secondary_clicked() {
+                self.interaction.cancel_place_zone();
+                self.scene_notice = Some("Zone placement cancelled".to_owned());
+            }
+            return;
+        }
+
+        // Right-click on an existing zone cycles its band — does NOT add zones.
         if response.secondary_clicked()
             && let Some(pointer) = pointer
         {
@@ -2152,17 +2965,7 @@ impl VisualizerApp {
                 if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
                     layer.visible = !layer.visible;
                 }
-            } else {
-                self.interaction
-                    .add_zone(normalize_visual_position(rect, pointer));
             }
-        }
-        if response.double_clicked()
-            && let Some(pointer) = pointer
-            && self.nearest_zone(rect, pointer).is_none()
-        {
-            self.interaction
-                .add_zone(normalize_visual_position(rect, pointer));
         }
         if response.drag_started_by(egui::PointerButton::Primary)
             && let Some(pointer) = pointer
@@ -2179,26 +2982,25 @@ impl VisualizerApp {
                 .is_none()
                 .then(|| Vec2::new(self.interaction.camera_yaw, self.interaction.camera_pitch));
         }
-        if (response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary))
-            && let Some(origin) = self.interaction.drag_origin
-            && let Some(zone) = self
-                .interaction
-                .selected
-                .and_then(|index| self.interaction.zones.get_mut(index))
+        // Cumulative total_drag_delta from drag start (per-frame drag_delta + origin was jerky;
+        // applying zero delta on release snapped camera/zones back).
+        if response.dragged_by(egui::PointerButton::Primary)
+            && let Some(total) = response.total_drag_delta()
         {
-            let delta = response.drag_delta();
-            zone.position = Vec2::new(
-                (origin.x + delta.x / rect.width().max(1.0)).clamp(0.0, 1.0),
-                (origin.y + delta.y / rect.height().max(1.0)).clamp(0.0, 1.0),
-            );
-        } else if (response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary))
-            && let Some(origin) = self.interaction.camera_drag_origin
-        {
-            let delta = response.drag_delta();
-            self.interaction.camera_yaw = origin.x - delta.x * 0.008;
-            self.interaction.camera_pitch = (origin.y + delta.y * 0.004).clamp(-1.2, 1.2);
+            if let Some(origin) = self.interaction.drag_origin
+                && let Some(zone) = self
+                    .interaction
+                    .selected
+                    .and_then(|index| self.interaction.zones.get_mut(index))
+            {
+                zone.position = Vec2::new(
+                    (origin.x + total.x / rect.width().max(1.0)).clamp(0.0, 1.0),
+                    (origin.y + total.y / rect.height().max(1.0)).clamp(0.0, 1.0),
+                );
+            } else if let Some(origin) = self.interaction.camera_drag_origin {
+                self.interaction.camera_yaw = origin.x - total.x * 0.01;
+                self.interaction.camera_pitch = (origin.y + total.y * 0.006).clamp(-1.2, 1.2);
+            }
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) {
             self.interaction.drag_origin = None;
@@ -2222,31 +3024,29 @@ impl VisualizerApp {
                 .or(Some(Vec2::new(self.gain, self.colors.glow)));
         }
         if response.dragged_by(egui::PointerButton::Secondary)
-            || response.drag_stopped_by(egui::PointerButton::Secondary)
+            && let Some(total) = response.total_drag_delta()
+            && let Some(origin) = self.interaction.secondary_drag_origin
         {
-            let delta = response.drag_delta();
-            if let Some(origin) = self.interaction.secondary_drag_origin {
-                if let Some(zone) = self
-                    .interaction
-                    .selected
-                    .and_then(|index| self.interaction.zones.get_mut(index))
-                {
-                    zone.radius =
-                        (origin.x + delta.x / rect.width().max(1.0) * 0.4).clamp(0.04, 0.45);
-                    zone.strength =
-                        (origin.y - delta.y / rect.height().max(1.0) * 3.0).clamp(0.0, 3.0);
-                } else if self.visual == 3 {
-                    if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
-                        layer.scale =
-                            (origin.x + delta.x / rect.width().max(1.0) * 1.65).clamp(0.35, 2.0);
-                        layer.reactivity =
-                            (origin.y - delta.y / rect.height().max(1.0) * 2.0).clamp(0.0, 2.0);
-                    }
-                } else {
-                    self.set_response(origin.x + delta.x / rect.width().max(1.0) * (6.0 - 0.25));
-                    self.colors.glow =
-                        (origin.y - delta.y / rect.height().max(1.0) * 2.0).clamp(0.0, 2.0);
+            if let Some(zone) = self
+                .interaction
+                .selected
+                .and_then(|index| self.interaction.zones.get_mut(index))
+            {
+                zone.radius =
+                    (origin.x + total.x / rect.width().max(1.0) * 0.4).clamp(0.04, 0.45);
+                zone.strength =
+                    (origin.y - total.y / rect.height().max(1.0) * 3.0).clamp(0.0, 3.0);
+            } else if self.visual == 3 {
+                if let Some(layer) = self.studio.layers.get_mut(self.studio.selected) {
+                    layer.scale =
+                        (origin.x + total.x / rect.width().max(1.0) * 1.65).clamp(0.35, 2.0);
+                    layer.reactivity =
+                        (origin.y - total.y / rect.height().max(1.0) * 2.0).clamp(0.0, 2.0);
                 }
+            } else {
+                self.set_response(origin.x + total.x / rect.width().max(1.0) * (6.0 - 0.25));
+                self.colors.glow =
+                    (origin.y - total.y / rect.height().max(1.0) * 2.0).clamp(0.0, 2.0);
             }
         }
         if response.drag_stopped_by(egui::PointerButton::Secondary) {
@@ -2388,45 +3188,82 @@ impl VisualizerApp {
 
     fn interact_forge(&mut self, response: &egui::Response, rect: Rect) {
         let pointer = response.interact_pointer_pos();
-        if response.secondary_clicked()
-            && let Some(pointer) = pointer
-        {
-            if let Some(index) = self.nearest_forge_node(rect, pointer) {
-                self.particle_forge.selected = Some(index);
-                self.particle_forge.nodes[index].band =
-                    (self.particle_forge.nodes[index].band + 1) % 4;
-            } else {
-                let normalized = normalize_visual_position(rect, pointer);
-                self.particle_forge.add_node([
-                    (normalized.x - 0.5) * 4.0,
-                    (0.5 - normalized.y) * 2.8,
-                    0.0,
-                ]);
+        let now = self.started.elapsed().as_secs_f32();
+        let shift_held = response.ctx.input(|input| input.modifiers.shift);
+
+        // Right-click (no drag): mode-specific particle context menu.
+        // Right-drag: pan the particle field.
+        let mut field_panned = false;
+        if response.drag_started_by(egui::PointerButton::Secondary) {
+            self.particle_forge.field_drag_origin = Some(self.particle_forge.field_offset);
+            if let Some(pointer) = pointer {
+                if let Some(index) = self.nearest_forge_node(rect, pointer) {
+                    self.particle_forge.selected = Some(index);
+                }
             }
         }
+        if response.dragged_by(egui::PointerButton::Secondary)
+            && let Some(total) = response.total_drag_delta()
+            && let Some(origin) = self.particle_forge.field_drag_origin
+        {
+            if total.length() > 3.0 {
+                field_panned = true;
+            }
+            self.particle_forge.field_offset = [
+                (origin[0] + total.x / rect.width().max(1.0) * 4.0).clamp(-4.0, 4.0),
+                (origin[1] - total.y / rect.height().max(1.0) * 2.8).clamp(-3.0, 3.0),
+            ];
+        }
+        if response.drag_stopped_by(egui::PointerButton::Secondary) {
+            // If this was a pan, skip the context menu that would open on release.
+            if let Some(origin) = self.particle_forge.field_drag_origin {
+                let moved = (self.particle_forge.field_offset[0] - origin[0]).abs() > 0.01
+                    || (self.particle_forge.field_offset[1] - origin[1]).abs() > 0.01;
+                if moved {
+                    field_panned = true;
+                }
+            }
+            self.particle_forge.field_drag_origin = None;
+        }
+
+        // Context menu only for a true right-click (not a field pan).
+        if !field_panned && !response.dragged_by(egui::PointerButton::Secondary) {
+            response.context_menu(|ui| {
+                self.draw_particle_context_menu(ui);
+            });
+        }
+
+        // Primary drag: always orbit camera on every physics mode.
+        // Node move is opt-in with Shift (so force handles never steal free-look).
         if response.drag_started_by(egui::PointerButton::Primary)
             && let Some(pointer) = pointer
         {
-            self.particle_forge.selected = self.nearest_forge_node(rect, pointer);
-            self.particle_forge.drag_origin = self
-                .particle_forge
-                .selected
-                .and_then(|index| self.particle_forge.nodes.get(index))
-                .map(|node| node.position);
-            self.particle_forge.camera_drag_origin =
-                self.particle_forge.selected.is_none().then_some([
+            let hit = self.nearest_forge_node(rect, pointer);
+            let move_node = shift_held && hit.is_some();
+            if move_node {
+                self.particle_forge.selected = hit;
+                self.particle_forge.drag_origin = hit
+                    .and_then(|index| self.particle_forge.nodes.get(index))
+                    .map(|node| node.position);
+                self.particle_forge.camera_drag_origin = None;
+            } else {
+                if let Some(index) = hit {
+                    self.particle_forge.selected = Some(index);
+                }
+                self.particle_forge.drag_origin = None;
+                self.particle_forge.camera_drag_origin = Some([
                     self.particle_forge.camera_yaw,
                     self.particle_forge.camera_pitch,
                 ]);
-            if self.particle_forge.camera_drag_origin.is_some() {
-                self.particle_forge.camera_override_until =
-                    self.started.elapsed().as_secs_f32() + 2.0;
+                self.particle_forge.user_camera_locked = true;
+                self.particle_forge.auto_camera = false;
+                self.particle_forge.camera_override_until = now + 1.0e6;
             }
         }
+
         if response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary)
+            && let Some(total) = response.total_drag_delta()
         {
-            let delta = response.drag_delta();
             if let Some(origin) = self.particle_forge.drag_origin
                 && let Some(node) = self
                     .particle_forge
@@ -2434,48 +3271,28 @@ impl VisualizerApp {
                     .and_then(|index| self.particle_forge.nodes.get_mut(index))
             {
                 node.position[0] =
-                    (origin[0] + delta.x / rect.width().max(1.0) * 4.0).clamp(-3.0, 3.0);
+                    (origin[0] + total.x / rect.width().max(1.0) * 4.0).clamp(-3.0, 3.0);
                 node.position[1] =
-                    (origin[1] - delta.y / rect.height().max(1.0) * 2.8).clamp(-2.5, 2.5);
+                    (origin[1] - total.y / rect.height().max(1.0) * 2.8).clamp(-2.5, 2.5);
             } else if let Some(origin) = self.particle_forge.camera_drag_origin {
-                self.particle_forge.camera_yaw = origin[0] - delta.x * 0.008;
-                self.particle_forge.camera_pitch = (origin[1] + delta.y * 0.004).clamp(-1.2, 1.2);
-                self.particle_forge.camera_override_until =
-                    self.started.elapsed().as_secs_f32() + 2.0;
+                self.particle_forge.camera_yaw = origin[0] - total.x * 0.01;
+                self.particle_forge.camera_pitch =
+                    (origin[1] + total.y * 0.006).clamp(-1.2, 1.2);
+                self.particle_forge.user_camera_locked = true;
+                self.particle_forge.auto_camera = false;
+                self.particle_forge.camera_override_until = now + 1.0e6;
             }
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) {
+            if self.particle_forge.camera_drag_origin.is_some() {
+                self.particle_forge.user_camera_locked = true;
+                self.particle_forge.auto_camera = false;
+                self.particle_forge.camera_override_until = now + 1.0e6;
+            }
             self.particle_forge.drag_origin = None;
             self.particle_forge.camera_drag_origin = None;
         }
-        if response.drag_started_by(egui::PointerButton::Secondary)
-            && let Some(pointer) = pointer
-        {
-            self.particle_forge.selected = self.nearest_forge_node(rect, pointer);
-            self.particle_forge.secondary_drag_origin = self
-                .particle_forge
-                .selected
-                .and_then(|index| self.particle_forge.nodes.get(index))
-                .map(|node| [node.radius, node.strength]);
-        }
-        if response.dragged_by(egui::PointerButton::Secondary)
-            || response.drag_stopped_by(egui::PointerButton::Secondary)
-        {
-            let delta = response.drag_delta();
-            if let Some(origin) = self.particle_forge.secondary_drag_origin
-                && let Some(node) = self
-                    .particle_forge
-                    .selected
-                    .and_then(|index| self.particle_forge.nodes.get_mut(index))
-            {
-                node.radius = (origin[0] + delta.x / rect.width().max(1.0) * 1.5).clamp(0.08, 1.5);
-                node.strength =
-                    (origin[1] - delta.y / rect.height().max(1.0) * 3.0).clamp(0.0, 3.0);
-            }
-        }
-        if response.drag_stopped_by(egui::PointerButton::Secondary) {
-            self.particle_forge.secondary_drag_origin = None;
-        }
+
         if response.hovered() {
             let (scroll, shift) = response
                 .ctx
@@ -2493,9 +3310,143 @@ impl VisualizerApp {
                     self.particle_forge.camera_zoom = (self.particle_forge.camera_zoom
                         * (-scroll * 0.0015).exp())
                     .clamp(0.35, 3.0);
+                    self.particle_forge.user_camera_locked = true;
+                    self.particle_forge.auto_camera = false;
                 }
             }
         }
+    }
+
+    /// Right-click menu for the active particle physics mode.
+    fn draw_particle_context_menu(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(240.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · particle field",
+                self.particle_style.label()
+            ))
+            .strong()
+            .color(Color32::from_rgb(90, 245, 220)),
+        );
+        ui.label(
+            egui::RichText::new(self.particle_style.blurb())
+                .small()
+                .color(Color32::from_rgb(145, 170, 190)),
+        );
+        ui.separator();
+
+        ui.menu_button("Physics mode", |ui| {
+            for style in ParticleStyle::ALL {
+                if ui
+                    .selectable_label(self.particle_style == style, style.label())
+                    .clicked()
+                {
+                    self.particle_style = style;
+                    style.apply(&mut self.particle_forge);
+                    if let Some(renderer) = &self.particle_forge_renderer {
+                        renderer.reseed_particles();
+                    }
+                    ui.close();
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("↑ Prev").clicked() {
+                self.cycle_particle_style(false);
+                ui.close();
+            }
+            if ui.button("↓ Next").clicked() {
+                self.cycle_particle_style(true);
+                ui.close();
+            }
+        });
+
+        ui.separator();
+        ui.label(
+            egui::RichText::new("Mode controls")
+                .small()
+                .color(Color32::from_rgb(145, 170, 190)),
+        );
+        let specs = self.particle_style.controls();
+        for (index, spec) in specs.iter().enumerate() {
+            if spec.label == "Reserved" {
+                continue;
+            }
+            ui.add(
+                egui::Slider::new(
+                    &mut self.particle_forge.mode_params[index],
+                    spec.min..=spec.max,
+                )
+                .text(spec.label)
+                .fixed_decimals(2),
+            );
+        }
+
+        // Extra one-shot actions per mode family.
+        match self.particle_style {
+            ParticleStyle::SpringMesh => {
+                ui.separator();
+                ui.label("Mountains");
+                if ui.button("Add mountain peak").clicked() {
+                    let peaks = &mut self.particle_forge.mode_params[2];
+                    *peaks = (*peaks + 1.0).min(12.0);
+                }
+                if ui.button("Clear mountains").clicked() {
+                    self.particle_forge.mode_params[2] = 0.0;
+                }
+            }
+            ParticleStyle::FireworkBurst => {
+                if ui.button("Trigger burst").clicked() {
+                    self.particle_forge.event_envelope = 1.0;
+                }
+            }
+            ParticleStyle::ParticleVortex | ParticleStyle::BoidsSwarm => {
+                ui.checkbox(&mut self.particle_forge.reverse, "Reverse spin");
+            }
+            _ => {}
+        }
+
+        ui.separator();
+        if ui.button("Reseed particles").clicked() {
+            self.particle_forge.bump_reseed();
+            if let Some(renderer) = &self.particle_forge_renderer {
+                renderer.reseed_particles();
+            }
+            ui.close();
+        }
+        if ui.button("Reset field position").clicked() {
+            self.particle_forge.field_offset = [0.0, 0.0];
+            ui.close();
+        }
+        if ui.button("Reset this mode defaults").clicked() {
+            let quality = self.particle_forge.quality;
+            let locked = self.particle_forge.user_camera_locked;
+            let yaw = self.particle_forge.camera_yaw;
+            let pitch = self.particle_forge.camera_pitch;
+            let zoom = self.particle_forge.camera_zoom;
+            self.particle_style.apply(&mut self.particle_forge);
+            self.particle_forge.quality = quality;
+            self.particle_forge.field_offset = [0.0, 0.0];
+            if locked {
+                self.particle_forge.user_camera_locked = true;
+                self.particle_forge.camera_yaw = yaw;
+                self.particle_forge.camera_pitch = pitch;
+                self.particle_forge.camera_zoom = zoom;
+            }
+            if let Some(renderer) = &self.particle_forge_renderer {
+                renderer.reseed_particles();
+            }
+            ui.close();
+        }
+        ui.checkbox(&mut self.particle_forge.auto_camera, "Automatic camera");
+        ui.checkbox(&mut self.particle_forge.reverse, "Reverse direction");
+        ui.label(
+            egui::RichText::new(
+                "LMB drag = orbit · RMB drag = pan field · Scroll = zoom · Shift+LMB = node",
+            )
+            .small()
+            .color(Color32::from_rgb(145, 170, 190)),
+        );
     }
 
     fn reset_interaction(&mut self) {
@@ -2546,6 +3497,7 @@ impl VisualizerApp {
         self.overlay = true;
         self.show_text = true;
         self.particle_forge.reset();
+        self.scope = ScopeControls::default();
         self.event_horizon.reset_journey();
         self.performance.reset();
         let default_decks = self
@@ -2566,6 +3518,9 @@ impl VisualizerApp {
         {
             self.mode_parameters = preset_parameter_defaults(preset);
             self.gain = preset.response.default;
+        } else if self.visual == 0 {
+            self.scope = ScopeControls::default();
+            self.gain = self.scope.response;
         } else {
             self.gain = 2.2;
         }
@@ -2584,6 +3539,42 @@ impl VisualizerApp {
             })
             .min_by(|left, right| left.1.total_cmp(&right.1))
             .map(|(index, _)| index)
+    }
+
+    fn draw_zone_place_preview(&self, painter: &egui::Painter, rect: Rect, pointer: Pos2) {
+        if self.interaction.zone_tool != ZonePlaceTool::Place {
+            return;
+        }
+        let scale = rect.size().min_elem();
+        let radius = (0.16 * scale).max(22.0);
+        let color = Color32::from_rgb(90, 245, 220);
+        painter.circle_stroke(pointer, radius, Stroke::new(2.0, color));
+        painter.circle_stroke(pointer, radius * 0.35, Stroke::new(1.2, color.gamma_multiply(0.7)));
+        painter.line_segment(
+            [
+                pointer - Vec2::new(radius * 0.55, 0.0),
+                pointer + Vec2::new(radius * 0.55, 0.0),
+            ],
+            Stroke::new(1.4, color),
+        );
+        painter.line_segment(
+            [
+                pointer - Vec2::new(0.0, radius * 0.55),
+                pointer + Vec2::new(0.0, radius * 0.55),
+            ],
+            Stroke::new(1.4, color),
+        );
+        painter.text(
+            pointer + Vec2::new(radius + 8.0, -8.0),
+            egui::Align2::LEFT_CENTER,
+            format!(
+                "Place · {} · {}",
+                self.interaction.place_kind.label(),
+                self.interaction.place_band.label()
+            ),
+            egui::FontId::monospace(12.0),
+            color,
+        );
     }
 
     fn draw_zone_handles(&self, painter: &egui::Painter, rect: Rect) {
@@ -3227,19 +4218,42 @@ impl VisualizerApp {
             self.features.onset,
             self.features.transient,
         ]);
+        // Pack 64-band spectrum → 16 bands for Spectral Form + other spectrum modes.
+        let mut spectrum8 = [0.0_f32; particle_forge::SPECTRUM_PACK];
+        let bands = self.features.spectrum.len().max(1);
+        let n = particle_forge::SPECTRUM_PACK;
+        let chunk = (bands / n).max(1);
+        for (slot, sample) in spectrum8.iter_mut().enumerate() {
+            let start = slot * chunk;
+            let end = ((slot + 1) * chunk).min(bands);
+            if start < end {
+                let sum: f32 = self.features.spectrum[start..end].iter().sum();
+                let mean = sum / (end - start) as f32;
+                *sample = mean.powf(0.72).clamp(0.0, 2.0);
+            }
+        }
+        // Pre-emphasize beat features so quiet music still moves the field.
+        let drive = (self.gain * self.plugin_multiplier).clamp(0.35, 6.0);
+        let low = (self.features.low * 1.15).min(1.5);
+        let mid = (self.features.mid * 1.1).min(1.5);
+        let high = (self.features.high * 1.2).min(1.5);
+        let rms = (self.features.rms * 1.25).min(1.5);
+        let onset = (self.features.onset * 1.35).min(1.5);
+        let transient = (self.features.transient * 1.25).min(1.5);
         renderer.paint(
             painter,
             rect,
             ForgeFrame {
                 time,
                 delta: (self.frame_stats.current_ms as f32 / 1_000.0).min(0.05),
-                gain: self.gain,
-                low: self.features.low,
-                mid: self.features.mid,
-                high: self.features.high,
-                rms: self.features.rms,
-                onset: self.features.onset,
-                transient: self.features.transient,
+                gain: drive,
+                low,
+                mid,
+                high,
+                rms,
+                onset,
+                transient,
+                spectrum8,
                 state: &forge,
                 colors: [
                     shift_color(self.colors.bass, color_phase).to_normalized_gamma_f32(),
@@ -3256,6 +4270,7 @@ impl VisualizerApp {
             return;
         };
         let event_horizon = renderer.active_id() == EVENT_HORIZON_ID;
+        let valley_flight = renderer.active_id() == VALLEY_FLIGHT_ID;
         if event_horizon {
             self.event_horizon
                 .draw(painter, rect, &self.mode_parameters);
@@ -3277,6 +4292,9 @@ impl VisualizerApp {
         parameters[response_index] = response;
         if event_horizon {
             self.event_horizon.apply_live_controls(&mut parameters);
+        }
+        if valley_flight {
+            self.valley_phrase.apply_live(&mut parameters);
         }
         renderer.paint_with_opacity(
             painter,
@@ -3763,31 +4781,23 @@ impl VisualizerApp {
         blend: StudioBlend,
         drive: f32,
     ) {
-        let center = rect.center();
-        for grid in 1..8 {
-            let x = egui::lerp(rect.left()..=rect.right(), grid as f32 / 8.0);
-            painter.line_segment(
-                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                Stroke::new(
-                    1.0,
-                    Self::studio_color(self.colors.mid, opacity * 0.1, blend),
-                ),
-            );
-        }
-        painter.line_segment(
-            [
-                Pos2::new(rect.left(), center.y),
-                Pos2::new(rect.right(), center.y),
-            ],
-            Stroke::new(
-                1.0,
-                Self::studio_color(self.colors.full, opacity * 0.25, blend),
-            ),
-        );
-
+        let scope = &self.scope;
+        let style = if self.visual == 0 {
+            scope.style
+        } else {
+            ScopeStyle::ClassicTrail
+        };
+        let response = if self.visual == 0 {
+            scope.response
+        } else {
+            self.gain
+        };
         let time = self.started.elapsed().as_secs_f32();
-        let amplitude = rect.height() * 0.32 * self.gain * drive;
-        let history = if self.visual_history.waveforms.is_empty() {
+        let center = rect.center();
+        let amplitude =
+            rect.height() * 0.32 * response * drive * scope.amplitude.clamp(0.1, 2.5);
+        let center_y = center.y + rect.height() * scope.vertical_offset.clamp(-0.4, 0.4) * 0.5;
+        let history: Vec<&[f32]> = if self.visual_history.waveforms.is_empty() {
             vec![self.features.waveform.as_slice()]
         } else {
             self.visual_history
@@ -3796,43 +4806,318 @@ impl VisualizerApp {
                 .map(Vec::as_slice)
                 .collect()
         };
-        for (trail, waveform) in history.iter().enumerate() {
-            let age = (trail + 1) as f32 / history.len() as f32;
-            let points = waveform_points(waveform, rect, center.y, amplitude);
-            let color = Self::studio_color(
-                self.colors.spectrum_color(age, time),
-                opacity * (0.12 + age * 0.5),
-                blend,
-            );
-            painter.add(egui::Shape::line(
-                points,
-                Stroke::new(0.7 + age * 1.2, color),
-            ));
-        }
-        let points = waveform_points(
-            history
-                .last()
-                .copied()
-                .unwrap_or(self.features.waveform.as_slice()),
-            rect,
-            center.y,
-            amplitude,
+        let wave = history
+            .last()
+            .copied()
+            .unwrap_or(self.features.waveform.as_slice());
+        let onset = self.features.onset * scope.onset_bloom.clamp(0.0, 3.0);
+
+        // Shared grid / baseline for linear scopes.
+        let linear = !matches!(
+            style,
+            ScopeStyle::CircularRadar | ScopeStyle::Lissajous
         );
-        painter.add(egui::Shape::line(
-            points.clone(),
-            Stroke::new(
-                13.0 + self.features.onset * 8.0,
-                Self::studio_color(
-                    self.colors.full,
-                    opacity * (0.05 + self.colors.glow * 0.04),
-                    blend,
+        if linear {
+            let grid_alpha = scope.grid.clamp(0.0, 1.0);
+            if grid_alpha > 0.01 {
+                for grid in 1..8 {
+                    let x = egui::lerp(rect.left()..=rect.right(), grid as f32 / 8.0);
+                    painter.line_segment(
+                        [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                        Stroke::new(
+                            1.0,
+                            Self::studio_color(self.colors.mid, opacity * 0.1 * grid_alpha, blend),
+                        ),
+                    );
+                }
+            }
+            painter.line_segment(
+                [
+                    Pos2::new(rect.left(), center_y),
+                    Pos2::new(rect.right(), center_y),
+                ],
+                Stroke::new(
+                    1.0,
+                    Self::studio_color(
+                        self.colors.full,
+                        opacity * 0.25 * scope.baseline.clamp(0.0, 1.0),
+                        blend,
+                    ),
                 ),
-            ),
-        ));
-        painter.add(egui::Shape::line(
-            points,
-            Stroke::new(2.0, Self::studio_color(self.colors.full, opacity, blend)),
-        ));
+            );
+        }
+
+        match style {
+            ScopeStyle::ClassicTrail | ScopeStyle::DualMirror | ScopeStyle::FireTrace
+            | ScopeStyle::IceLattice => {
+                let mirror = if style == ScopeStyle::DualMirror {
+                    scope.mirror.max(0.85)
+                } else if style == ScopeStyle::ClassicTrail {
+                    scope.mirror
+                } else {
+                    scope.mirror * 0.5
+                };
+                let layer_count = scope.trail_layers.round().clamp(1.0, 10.0) as usize;
+                let start = history.len().saturating_sub(layer_count);
+                let trails = &history[start..];
+                let fade = scope.trail_fade.clamp(0.2, 2.0);
+                for (trail, waveform) in trails.iter().enumerate() {
+                    let age = (trail + 1) as f32 / trails.len() as f32;
+                    let mut points = waveform_points(waveform, rect, center_y, amplitude);
+                    if scope.scan.abs() > 0.001 {
+                        let len = points.len();
+                        let shift = ((time * scope.scan * 40.0) as i32)
+                            .rem_euclid(len.max(1) as i32) as usize;
+                        if shift > 0 && len > 1 {
+                            points.rotate_left(shift.min(len - 1));
+                        }
+                    }
+                    let base = match style {
+                        ScopeStyle::FireTrace => Color32::from_rgb(
+                            (255.0 * age).min(255.0) as u8,
+                            (80.0 + 120.0 * age) as u8,
+                            20,
+                        ),
+                        ScopeStyle::IceLattice => Color32::from_rgb(
+                            (40.0 + 80.0 * age) as u8,
+                            (160.0 + 60.0 * age) as u8,
+                            255,
+                        ),
+                        _ => self.colors.spectrum_color(age, time),
+                    };
+                    let color = Self::studio_color(
+                        base,
+                        opacity * (0.12 + age * 0.5) * age.powf(fade),
+                        blend,
+                    );
+                    let width = match style {
+                        ScopeStyle::FireTrace => (1.2 + age * 2.4) * scope.echo_width.clamp(0.2, 3.0),
+                        ScopeStyle::IceLattice => (0.5 + age * 0.9) * scope.echo_width.clamp(0.2, 3.0),
+                        _ => (0.7 + age * 1.2) * scope.echo_width.clamp(0.2, 3.0),
+                    };
+                    painter.add(egui::Shape::line(points, Stroke::new(width, color)));
+                    if mirror > 0.01 {
+                        let mirror_points =
+                            waveform_points(waveform, rect, center_y, -amplitude * mirror);
+                        painter.add(egui::Shape::line(
+                            mirror_points,
+                            Stroke::new(
+                                width * 0.75,
+                                Self::studio_color(base, opacity * 0.28 * age * mirror, blend),
+                            ),
+                        ));
+                    }
+                }
+                let points = waveform_points(wave, rect, center_y, amplitude);
+                let bloom = match style {
+                    ScopeStyle::FireTrace => scope.bloom.clamp(0.0, 3.0) * 1.35,
+                    ScopeStyle::IceLattice => scope.bloom.clamp(0.0, 3.0) * 0.85,
+                    _ => scope.bloom.clamp(0.0, 3.0),
+                };
+                painter.add(egui::Shape::line(
+                    points.clone(),
+                    Stroke::new(
+                        (13.0 + onset * 8.0) * bloom,
+                        Self::studio_color(
+                            self.colors.full,
+                            opacity * (0.05 + self.colors.glow * 0.04) * bloom,
+                            blend,
+                        ),
+                    ),
+                ));
+                painter.add(egui::Shape::line(
+                    points,
+                    Stroke::new(
+                        2.0 * scope.core_width.clamp(0.2, 4.0),
+                        Self::studio_color(self.colors.full, opacity, blend),
+                    ),
+                ));
+            }
+            ScopeStyle::SpectrumRibbon => {
+                let n = wave.len().max(2);
+                for i in 0..n.saturating_sub(1) {
+                    let t0 = i as f32 / (n - 1) as f32;
+                    let t1 = (i + 1) as f32 / (n - 1) as f32;
+                    let x0 = egui::lerp(rect.left()..=rect.right(), t0);
+                    let x1 = egui::lerp(rect.left()..=rect.right(), t1);
+                    let y0 = center_y - wave[i] * amplitude;
+                    let y1 = center_y - wave[i + 1] * amplitude;
+                    let band = self.features.spectrum
+                        [(i * self.features.spectrum.len() / n).min(self.features.spectrum.len() - 1)];
+                    let color = Self::studio_color(
+                        self.colors.spectrum_color(t0, time),
+                        opacity * (0.35 + band * 0.65),
+                        blend,
+                    );
+                    painter.line_segment(
+                        [Pos2::new(x0, y0), Pos2::new(x1, y1)],
+                        Stroke::new(
+                            (1.5 + band * 4.0) * scope.core_width.clamp(0.2, 4.0),
+                            color,
+                        ),
+                    );
+                }
+            }
+            ScopeStyle::CircularRadar => {
+                let radius = rect.size().min_elem() * 0.32 * scope.amplitude.clamp(0.4, 2.0);
+                painter.circle_stroke(
+                    center,
+                    radius * 0.25,
+                    Stroke::new(1.0, Self::studio_color(self.colors.mid, opacity * 0.25, blend)),
+                );
+                painter.circle_stroke(
+                    center,
+                    radius,
+                    Stroke::new(1.0, Self::studio_color(self.colors.full, opacity * 0.2, blend)),
+                );
+                let n = wave.len().max(3);
+                let mut points = Vec::with_capacity(n + 1);
+                for (i, sample) in wave.iter().enumerate() {
+                    let ang = std::f32::consts::TAU * (i as f32 / n as f32) - std::f32::consts::FRAC_PI_2
+                        + time * scope.scan * 0.4;
+                    let r = radius * (0.35 + sample.abs() * 0.65 * response.min(3.0) / 3.0);
+                    points.push(center + Vec2::new(ang.cos() * r, ang.sin() * r));
+                }
+                if let Some(first) = points.first().copied() {
+                    points.push(first);
+                }
+                painter.add(egui::Shape::line(
+                    points,
+                    Stroke::new(
+                        2.0 * scope.core_width.clamp(0.2, 4.0),
+                        Self::studio_color(self.colors.full, opacity, blend),
+                    ),
+                ));
+                // Sweep arm
+                let sweep = time * (1.2 + self.features.low) - std::f32::consts::FRAC_PI_2;
+                painter.line_segment(
+                    [
+                        center,
+                        center + Vec2::new(sweep.cos() * radius, sweep.sin() * radius),
+                    ],
+                    Stroke::new(
+                        1.5,
+                        Self::studio_color(self.colors.treble, opacity * (0.4 + onset * 0.4), blend),
+                    ),
+                );
+            }
+            ScopeStyle::Lissajous => {
+                let n = wave.len().max(4);
+                let amp = rect.size().min_elem() * 0.28 * scope.amplitude.clamp(0.3, 2.2);
+                let delay = (n / 4).max(1);
+                let mut points = Vec::with_capacity(n);
+                for i in 0..n {
+                    let x = wave[i];
+                    let y = wave[(i + delay) % n];
+                    points.push(Pos2::new(
+                        center.x + x * amp * response.min(3.0) / 2.2,
+                        center_y - y * amp * response.min(3.0) / 2.2,
+                    ));
+                }
+                painter.add(egui::Shape::line(
+                    points,
+                    Stroke::new(
+                        2.2 * scope.core_width.clamp(0.2, 4.0),
+                        Self::studio_color(self.colors.full, opacity, blend),
+                    ),
+                ));
+                painter.circle_stroke(
+                    center,
+                    amp * 0.15,
+                    Stroke::new(1.0, Self::studio_color(self.colors.mid, opacity * 0.2, blend)),
+                );
+            }
+            ScopeStyle::BarPulse => {
+                let bars = 64.min(wave.len());
+                let step = wave.len() / bars;
+                let bar_w = rect.width() / bars as f32 * 0.7;
+                for i in 0..bars {
+                    let sample = wave[i * step].abs();
+                    let band = self.features.spectrum
+                        [(i * self.features.spectrum.len() / bars).min(self.features.spectrum.len() - 1)];
+                    let h = (sample * 0.55 + band * 0.45) * amplitude * 1.4;
+                    let x = rect.left() + (i as f32 + 0.5) * (rect.width() / bars as f32);
+                    let color = Self::studio_color(
+                        self.colors.spectrum_color(i as f32 / bars as f32, time),
+                        opacity * (0.35 + band * 0.65),
+                        blend,
+                    );
+                    painter.rect_filled(
+                        Rect::from_center_size(
+                            Pos2::new(x, center_y - h * 0.5),
+                            Vec2::new(bar_w, h.max(1.0)),
+                        ),
+                        1.0,
+                        color,
+                    );
+                }
+            }
+            ScopeStyle::DotMatrix => {
+                let step = 3.max(wave.len() / 96);
+                for (i, sample) in wave.iter().enumerate().step_by(step) {
+                    let t = i as f32 / (wave.len() - 1).max(1) as f32;
+                    let x = egui::lerp(rect.left()..=rect.right(), t);
+                    let y = center_y - sample * amplitude;
+                    let band = self.features.spectrum
+                        [(i * self.features.spectrum.len() / wave.len()).min(self.features.spectrum.len() - 1)];
+                    painter.circle_filled(
+                        Pos2::new(x, y),
+                        (1.4 + sample.abs() * 3.5 + onset * 2.0) * scope.core_width.clamp(0.3, 2.5),
+                        Self::studio_color(
+                            self.colors.spectrum_color(t, time),
+                            opacity * (0.4 + band * 0.6),
+                            blend,
+                        ),
+                    );
+                }
+            }
+            ScopeStyle::BeatSpike => {
+                let points = waveform_points(wave, rect, center_y, amplitude);
+                painter.add(egui::Shape::line(
+                    points.clone(),
+                    Stroke::new(
+                        1.8 * scope.core_width.clamp(0.2, 4.0),
+                        Self::studio_color(self.colors.full, opacity * 0.85, blend),
+                    ),
+                ));
+                // Peak markers
+                let n = wave.len().max(2);
+                for i in 1..n.saturating_sub(1) {
+                    let a = wave[i - 1].abs();
+                    let b = wave[i].abs();
+                    let c = wave[i + 1].abs();
+                    if b > a && b > c && b > 0.25 {
+                        let t = i as f32 / (n - 1) as f32;
+                        let x = egui::lerp(rect.left()..=rect.right(), t);
+                        let y = center_y - wave[i] * amplitude;
+                        let spike = 8.0 + b * 18.0 + onset * 20.0;
+                        painter.line_segment(
+                            [Pos2::new(x, y - spike), Pos2::new(x, y + spike * 0.2)],
+                            Stroke::new(
+                                1.5,
+                                Self::studio_color(
+                                    self.colors.treble,
+                                    opacity * (0.4 + b * 0.5),
+                                    blend,
+                                ),
+                            ),
+                        );
+                    }
+                }
+                if onset > 0.2 {
+                    painter.line_segment(
+                        [
+                            Pos2::new(rect.left(), center_y),
+                            Pos2::new(rect.right(), center_y),
+                        ],
+                        Stroke::new(
+                            2.0 + onset * 6.0,
+                            Self::studio_color(self.colors.full, opacity * onset * 0.35, blend),
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     fn draw_particles_layer(
@@ -4375,10 +5660,47 @@ impl VisualizerApp {
                             ui.label(egui::RichText::new(status).strong().color(status_color));
                         });
                         ui.label(
-                            egui::RichText::new(VISUAL_NAMES[self.visual])
+                            egui::RichText::new(self.active_visual_label())
                                 .monospace()
+                                .size(15.0)
                                 .color(Color32::from_rgb(90, 245, 220)),
                         );
+                        if let Some(subtitle) = self.active_visual_subtitle() {
+                            ui.label(
+                                egui::RichText::new(subtitle)
+                                    .small()
+                                    .color(Color32::from_rgb(145, 170, 190)),
+                            );
+                        }
+                        // Cycle controls for scope / particles / presets
+                        if matches!(self.visual, 0 | 1 | 2) {
+                            ui.horizontal(|ui| {
+                                let (prev, next, what) = match self.visual {
+                                    0 => ("Previous scope", "Next scope", "Scope"),
+                                    1 => ("Previous particle look", "Next particle look", "Particles"),
+                                    _ => ("Previous preset", "Next preset", "Preset"),
+                                };
+                                if ui.small_button("↑").on_hover_text(prev).clicked() {
+                                    match self.visual {
+                                        0 => self.cycle_scope(false),
+                                        1 => self.cycle_particle_style(false),
+                                        _ => self.cycle_preset(false),
+                                    }
+                                }
+                                if ui.small_button("↓").on_hover_text(next).clicked() {
+                                    match self.visual {
+                                        0 => self.cycle_scope(true),
+                                        1 => self.cycle_particle_style(true),
+                                        _ => self.cycle_preset(true),
+                                    }
+                                }
+                                ui.label(
+                                    egui::RichText::new(format!("{what} · ↑/↓"))
+                                        .small()
+                                        .color(Color32::from_rgb(110, 150, 160)),
+                                );
+                            });
+                        }
                         let source = self.capture.as_ref().map(|capture| capture.source);
                         if let Some(hint) = status_hint(status, source) {
                             ui.label(
@@ -4508,31 +5830,36 @@ impl VisualizerApp {
                             );
                         }
 
-                        if self.visual == 2 {
-                            let active_id = self
-                                .gpu_preset
-                                .as_ref()
-                                .map(|renderer| renderer.active_id().to_owned());
-                            let active_name = active_id
-                                .as_ref()
-                                .and_then(|id| self.presets.iter().find(|preset| &preset.id == id))
-                                .map_or_else(
-                                    || {
-                                        active_id
-                                            .clone()
-                                            .unwrap_or_else(|| "No valid preset".to_owned())
-                                    },
-                                    |preset| preset.name.clone(),
-                                );
+                        if matches!(self.visual, 0 | 1 | 2) {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(active_name).strong());
-                                if ui.small_button("←").on_hover_text("Previous preset").clicked() {
-                                    self.cycle_preset(false);
+                                ui.label(
+                                    egui::RichText::new(self.active_mode_title())
+                                        .strong()
+                                        .color(Color32::from_rgb(220, 255, 250)),
+                                );
+                                if ui
+                                    .small_button("↑")
+                                    .on_hover_text("Previous (arrow up)")
+                                    .clicked()
+                                {
+                                    match self.visual {
+                                        0 => self.cycle_scope(false),
+                                        1 => self.cycle_particle_style(false),
+                                        _ => self.cycle_preset(false),
+                                    }
                                 }
-                                if ui.small_button("→").on_hover_text("Next preset").clicked() {
-                                    self.cycle_preset(true);
+                                if ui
+                                    .small_button("↓")
+                                    .on_hover_text("Next (arrow down)")
+                                    .clicked()
+                                {
+                                    match self.visual {
+                                        0 => self.cycle_scope(true),
+                                        1 => self.cycle_particle_style(true),
+                                        _ => self.cycle_preset(true),
+                                    }
                                 }
-                                if ui.button("Library [L]").clicked() {
+                                if self.visual == 2 && ui.button("Library [L]").clicked() {
                                     self.visual_library_panel = true;
                                 }
                             });
@@ -4549,7 +5876,12 @@ impl VisualizerApp {
                         let range = response
                             .map(|parameter| parameter.minimum..=parameter.maximum)
                             .unwrap_or(0.5..=6.0);
-                        ui.add(egui::Slider::new(&mut self.gain, range).text("response"));
+                        let gain_changed = ui
+                            .add(egui::Slider::new(&mut self.gain, range).text("response"))
+                            .changed();
+                        if gain_changed && self.visual == 0 {
+                            self.scope.response = self.gain;
+                        }
                         ui.horizontal(|ui| {
                             for (index, label) in VISUAL_BUTTONS.iter().enumerate() {
                                 if ui
@@ -4584,8 +5916,8 @@ impl VisualizerApp {
                             if ui
                                 .selectable_label(self.instrument_panel, "Instrument [I]")
                                 .on_hover_text(
-                                    "Open the live inspector for audio routing, sound zones, mode \
-                                     controls, colors, materials, and camera settings.",
+                                    "Universal inspector: mode picker, live audio routing, Zone \
+                                     Studio additions, colors/materials, camera, and saved scenes.",
                                 )
                                 .clicked()
                             {
@@ -4593,7 +5925,10 @@ impl VisualizerApp {
                             }
                             if ui
                                 .selectable_label(self.mode_panel, "Mode [O]")
-                                .on_hover_text("Open controls specific to the active visual.")
+                                .on_hover_text(
+                                    "Controls unique to the active visual only (scope, forge, \
+                                     GPU preset parameters, Studio, or Canvas).",
+                                )
                                 .clicked()
                             {
                                 self.mode_panel = !self.mode_panel;
@@ -4818,11 +6153,9 @@ impl VisualizerApp {
                             .color(Color32::from_rgb(110, 130, 150)),
                         )
                         .on_hover_text(
-                            "Left/Right cycles visuals; 1/2/3/4/5 selects one directly; Up/Down changes \
-                             GPU presets; I opens the Instrument Panel; right-click/right-drag acts \
-                             directly on the canvas; L opens the visual library; H hides visual text; Shift+R reverts session \
-                             changes; Tab hides the overlay; Escape closes the panel or returns to \
-                             windowed mode before exiting.",
+                            "Left/Right cycles visuals; 1/2/3/4/5 selects one directly; Up/Down cycles \
+                             GPU presets or Neon Scope styles; I opens Instrument; O opens Mode Controls; \
+                             L library; H labels; Shift+R reverts; Tab hides overlay; Escape closes.",
                         );
                     });
             });
@@ -5272,187 +6605,483 @@ impl VisualizerApp {
         }
     }
 
-    fn draw_mode_controls(&mut self, ui: &mut egui::Ui) {
-        if self.visual == 4 {
-            self.draw_canvas_controls(ui);
-            return;
+    fn active_mode_title(&self) -> String {
+        match self.visual {
+            0 => format!("Neon Scope · {}", self.scope.style.label()),
+            1 => format!("Particle Forge · {}", self.particle_style.label()),
+            2 => self
+                .gpu_preset
+                .as_ref()
+                .and_then(|renderer| {
+                    self.presets
+                        .iter()
+                        .find(|preset| preset.id == renderer.active_id())
+                })
+                .map_or_else(|| "GPU Preset".to_owned(), |preset| preset.name.clone()),
+            3 => "Studio · Living Photograph".to_owned(),
+            _ => "Visual Canvas".to_owned(),
         }
-        let preset = self.gpu_preset.as_ref().and_then(|renderer| {
+    }
+
+    fn draw_mode_controls(&mut self, ui: &mut egui::Ui) {
+        let title = self.active_mode_title();
+        ui.label(
+            egui::RichText::new(format!("ACTIVE · {}", title.to_uppercase()))
+                .small()
+                .strong()
+                .color(Color32::from_rgb(90, 245, 220)),
+        );
+        ui.label(
+            egui::RichText::new(
+                "These sliders belong only to the current mode. Universal audio, zones, colors, \
+                 and camera stay in Instrument [I].",
+            )
+            .small()
+            .color(Color32::from_rgb(145, 170, 190)),
+        );
+        ui.separator();
+
+        match self.visual {
+            0 => self.draw_scope_mode_controls(ui),
+            1 => self.draw_forge_mode_controls(ui),
+            2 => self.draw_preset_mode_controls(ui),
+            3 => self.draw_studio_controls(ui),
+            _ => self.draw_canvas_controls(ui),
+        }
+    }
+
+    fn draw_scope_mode_controls(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Reset Neon Scope controls").clicked() {
+            let style = self.scope.style;
+            self.scope = ScopeControls {
+                style,
+                ..ScopeControls::default()
+            };
+            self.gain = self.scope.response;
+        }
+        egui::CollapsingHeader::new("Scope Style · ↑/↓")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("↑").on_hover_text("Previous scope").clicked() {
+                        self.cycle_scope(false);
+                    }
+                    if ui.small_button("↓").on_hover_text("Next scope").clicked() {
+                        self.cycle_scope(true);
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}/{}  {}",
+                            self.scope.style.index() + 1,
+                            ScopeStyle::ALL.len(),
+                            self.scope.style.label()
+                        ))
+                        .strong()
+                        .color(Color32::from_rgb(90, 245, 220)),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new("Arrow Up/Down cycle scopes while Neon Scope is active.")
+                        .small()
+                        .color(Color32::from_rgb(145, 170, 190)),
+                );
+                for style in ScopeStyle::ALL {
+                    if ui
+                        .selectable_label(self.scope.style == style, style.label())
+                        .clicked()
+                    {
+                        self.scope.style = style;
+                        self.scene_notice = Some(format!("Scope · {}", style.label()));
+                    }
+                }
+            });
+        egui::CollapsingHeader::new("Signal")
+            .default_open(true)
+            .show(ui, |ui| {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.scope.response, 0.25..=6.0)
+                            .text("Response")
+                            .fixed_decimals(2),
+                    )
+                    .changed()
+                {
+                    self.gain = self.scope.response;
+                }
+                ui.add(
+                    egui::Slider::new(&mut self.scope.amplitude, 0.1..=2.5)
+                        .text("Amplitude")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.smoothness, 0.0..=1.0)
+                        .text("Smoothness")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.scan, -3.0..=3.0)
+                        .text("Scan motion")
+                        .fixed_decimals(2),
+                );
+            });
+        egui::CollapsingHeader::new("Trace")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut self.scope.trail_layers, 1.0..=10.0)
+                        .text("Trail layers")
+                        .fixed_decimals(0),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.core_width, 0.2..=4.0)
+                        .text("Core width")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.echo_width, 0.2..=3.0)
+                        .text("Echo width")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.trail_fade, 0.2..=2.0)
+                        .text("Trail fade")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.bloom, 0.0..=3.0)
+                        .text("Bloom")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.onset_bloom, 0.0..=3.0)
+                        .text("Onset bloom")
+                        .fixed_decimals(2),
+                );
+            });
+        egui::CollapsingHeader::new("Frame")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut self.scope.grid, 0.0..=1.0)
+                        .text("Grid")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.baseline, 0.0..=1.0)
+                        .text("Baseline")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.mirror, 0.0..=1.0)
+                        .text("Mirror")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.scope.vertical_offset, -0.4..=0.4)
+                        .text("Vertical offset")
+                        .fixed_decimals(2),
+                );
+            });
+    }
+
+    fn draw_forge_mode_controls(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Reset this particle mode").clicked() {
+            let quality = self.particle_forge.quality;
+            self.particle_style.apply(&mut self.particle_forge);
+            self.particle_forge.quality = quality;
+            if let Some(renderer) = &self.particle_forge_renderer {
+                renderer.reseed_particles();
+            }
+            self.gain = 2.2;
+        }
+        egui::CollapsingHeader::new("Physics Mode · ↑/↓")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("↑").on_hover_text("Previous mode").clicked() {
+                        self.cycle_particle_style(false);
+                    }
+                    if ui.small_button("↓").on_hover_text("Next mode").clicked() {
+                        self.cycle_particle_style(true);
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}/{}  {}",
+                            self.particle_style.index() + 1,
+                            ParticleStyle::ALL.len(),
+                            self.particle_style.label()
+                        ))
+                        .strong()
+                        .color(Color32::from_rgb(90, 245, 220)),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(self.particle_style.blurb())
+                        .small()
+                        .color(Color32::from_rgb(145, 190, 170)),
+                );
+                for style in ParticleStyle::ALL {
+                    if ui
+                        .selectable_label(self.particle_style == style, style.label())
+                        .on_hover_text(style.blurb())
+                        .clicked()
+                    {
+                        self.particle_style = style;
+                        style.apply(&mut self.particle_forge);
+                        if let Some(renderer) = &self.particle_forge_renderer {
+                            renderer.reseed_particles();
+                        }
+                        self.scene_notice = Some(format!("Particles · {}", style.label()));
+                    }
+                }
+            });
+
+        ui.add(
+            egui::Slider::new(&mut self.gain, 0.25..=6.0)
+                .text("Music response")
+                .fixed_decimals(2),
+        );
+        ui.label(
+            egui::RichText::new(
+                "Raises bass/mid/high/onset coupling for every particle mode (glow, motion, streaks).",
+            )
+            .small()
+            .color(Color32::from_rgb(145, 170, 190)),
+        );
+
+        let specs = self.particle_style.controls();
+        egui::CollapsingHeader::new(format!("{} physics", self.particle_style.label()))
+            .default_open(true)
+            .show(ui, |ui| {
+                for (index, spec) in specs.iter().enumerate() {
+                    if spec.label == "Reserved" {
+                        continue;
+                    }
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.particle_forge.mode_params[index],
+                            spec.min..=spec.max,
+                        )
+                        .text(spec.label)
+                        .fixed_decimals(2),
+                    );
+                }
+            });
+
+        egui::CollapsingHeader::new("Camera & quality")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Quality");
+                    egui::ComboBox::from_id_salt("forge-quality")
+                        .selected_text(self.particle_forge.quality.label())
+                        .show_ui(ui, |ui| {
+                            for quality in ForgeQuality::ALL {
+                                ui.selectable_value(
+                                    &mut self.particle_forge.quality,
+                                    quality,
+                                    quality.label(),
+                                );
+                            }
+                        });
+                });
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.camera_zoom, 0.35..=3.0)
+                        .text("Zoom")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.camera_yaw, -6.28..=6.28)
+                        .text("Yaw")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.camera_pitch, -1.2..=1.2)
+                        .text("Pitch")
+                        .fixed_decimals(2),
+                );
+                ui.checkbox(&mut self.particle_forge.reverse, "Reverse spin");
+                ui.checkbox(&mut self.particle_forge.auto_camera, "Automatic camera");
+                ui.checkbox(&mut self.particle_forge.gizmo, "Show force gizmos");
+                ui.label(
+                    egui::RichText::new(
+                        "LMB drag = orbit · RMB drag = pan field · RMB click = mode menu · Scroll = zoom",
+                    )
+                    .small()
+                    .color(Color32::from_rgb(145, 170, 190)),
+                );
+                if self.particle_forge.user_camera_locked
+                    && ui.small_button("Unlock camera framing").clicked()
+                {
+                    self.particle_forge.user_camera_locked = false;
+                }
+            });
+
+        egui::CollapsingHeader::new("Materials & color")
+            .default_open(false)
+            .show(ui, |ui| {
+                gradient_value_control(
+                    ui,
+                    "Gradient shift",
+                    &mut self.particle_forge.gradient_shift,
+                    0.0,
+                    1.0,
+                    self.colors.bass,
+                    self.colors.treble,
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.materials.energy, 0.0..=1.0)
+                        .text("Energy glow")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.materials.cyber, 0.0..=1.0)
+                        .text("Cyber")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.materials.cosmic, 0.0..=1.0)
+                        .text("Cosmic")
+                        .fixed_decimals(2),
+                );
+            });
+
+        egui::CollapsingHeader::new("Advanced (topology / model)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Source");
+                    egui::ComboBox::from_id_salt("forge-source")
+                        .selected_text(self.particle_forge.source.label())
+                        .show_ui(ui, |ui| {
+                            for source in ForgeSceneSource::ALL {
+                                ui.selectable_value(
+                                    &mut self.particle_forge.source,
+                                    source,
+                                    source.label(),
+                                );
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Spawn topology");
+                    egui::ComboBox::from_id_salt("forge-topology")
+                        .selected_text(self.particle_forge.topology.label())
+                        .show_ui(ui, |ui| {
+                            for topology in ForgeTopology::ALL {
+                                ui.selectable_value(
+                                    &mut self.particle_forge.topology,
+                                    topology,
+                                    topology.label(),
+                                );
+                            }
+                        });
+                });
+                ui.add(
+                    egui::Slider::new(&mut self.particle_forge.topology_morph, 0.0..=1.0)
+                        .text("Topology morph")
+                        .fixed_decimals(2),
+                );
+                if self.particle_forge.source != ForgeSceneSource::Procedural
+                    && self.particle_forge.model.is_none()
+                {
+                    ui.label("Drop a bounded `.glb` model to activate this source.");
+                }
+                if let Some(notice) = &self.particle_forge.model_notice {
+                    ui.label(
+                        egui::RichText::new(notice)
+                            .small()
+                            .color(Color32::from_rgb(145, 190, 170)),
+                    );
+                }
+            });
+    }
+
+    fn draw_preset_mode_controls(&mut self, ui: &mut egui::Ui) {
+        let Some(preset) = self.gpu_preset.as_ref().and_then(|renderer| {
             self.presets
                 .iter()
                 .find(|preset| preset.id == renderer.active_id())
                 .cloned()
-        });
-        if self.visual == 2
-            && let Some(preset) = preset
-        {
-            if ui.button("Reset mode controls").clicked() {
-                self.mode_parameters = preset_parameter_defaults(&preset);
-                self.gain = preset.response.default;
+        }) else {
+            ui.colored_label(
+                Color32::from_rgb(255, 160, 90),
+                "No valid GPU preset is loaded. Pick one from Library [L].",
+            );
+            return;
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · {} mode parameters",
+                preset.name,
+                preset.parameters.len()
+            ))
+            .small()
+            .color(Color32::from_rgb(145, 190, 170)),
+        );
+        if ui.button("Reset all mode parameters").clicked() {
+            self.mode_parameters = preset_parameter_defaults(&preset);
+            self.gain = preset.response.default;
+        }
+        let mut groups = Vec::new();
+        for parameter in &preset.parameters {
+            if !groups.contains(&parameter.group) {
+                groups.push(parameter.group.clone());
             }
-            let mut groups = Vec::new();
-            for parameter in &preset.parameters {
-                if !groups.contains(&parameter.group) {
-                    groups.push(parameter.group.clone());
-                }
-            }
-            for group in groups {
-                egui::CollapsingHeader::new(&group)
-                    .id_salt(("mode-parameter-group", &group))
-                    .default_open(group == "Audio")
-                    .show(ui, |ui| {
-                        if ui.small_button("Reset group").clicked() {
-                            for (index, parameter) in preset
-                                .parameters
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, parameter)| parameter.group == group)
-                            {
-                                self.mode_parameters[index] = parameter.default;
-                                if parameter.id == "response" {
-                                    self.gain = parameter.default;
-                                }
-                            }
-                        }
+        }
+        for group in groups {
+            egui::CollapsingHeader::new(&group)
+                .id_salt(("mode-parameter-group", preset.id.as_str(), group.as_str()))
+                .default_open(true)
+                .show(ui, |ui| {
+                    if ui.small_button("Reset group").clicked() {
                         for (index, parameter) in preset
                             .parameters
                             .iter()
                             .enumerate()
                             .filter(|(_, parameter)| parameter.group == group)
                         {
-                            let changed = ui
-                                .add(
-                                    egui::Slider::new(
-                                        &mut self.mode_parameters[index],
-                                        parameter.minimum..=parameter.maximum,
-                                    )
-                                    .text(&parameter.label)
-                                    .fixed_decimals(2),
-                                )
-                                .changed();
-                            if changed && parameter.id == "response" {
-                                self.gain = self.mode_parameters[index];
+                            self.mode_parameters[index] = parameter.default;
+                            if parameter.id == "response" {
+                                self.gain = parameter.default;
                             }
                         }
-                    });
-            }
-            return;
-        }
-
-        let response_label = if self.visual == 0 {
-            "Trail response"
-        } else {
-            "Field response"
-        };
-        ui.add(
-            egui::Slider::new(&mut self.gain, 0.25..=6.0)
-                .text(response_label)
-                .fixed_decimals(2),
-        );
-        if self.visual == 1 {
-            ui.horizontal(|ui| {
-                ui.label("Quality");
-                egui::ComboBox::from_id_salt("forge-quality")
-                    .selected_text(self.particle_forge.quality.label())
-                    .show_ui(ui, |ui| {
-                        for quality in ForgeQuality::ALL {
-                            ui.selectable_value(
-                                &mut self.particle_forge.quality,
-                                quality,
-                                quality.label(),
-                            );
+                    }
+                    for (index, parameter) in preset
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, parameter)| parameter.group == group)
+                    {
+                        let changed = ui
+                            .add(
+                                egui::Slider::new(
+                                    &mut self.mode_parameters[index],
+                                    parameter.minimum..=parameter.maximum,
+                                )
+                                .text(&parameter.label)
+                                .fixed_decimals(2),
+                            )
+                            .changed();
+                        if changed && parameter.id == "response" {
+                            self.gain = self.mode_parameters[index];
                         }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Source");
-                egui::ComboBox::from_id_salt("forge-source")
-                    .selected_text(self.particle_forge.source.label())
-                    .show_ui(ui, |ui| {
-                        for source in ForgeSceneSource::ALL {
-                            ui.selectable_value(
-                                &mut self.particle_forge.source,
-                                source,
-                                source.label(),
-                            );
-                        }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Topology");
-                egui::ComboBox::from_id_salt("forge-topology")
-                    .selected_text(self.particle_forge.topology.label())
-                    .show_ui(ui, |ui| {
-                        for topology in ForgeTopology::ALL {
-                            ui.selectable_value(
-                                &mut self.particle_forge.topology,
-                                topology,
-                                topology.label(),
-                            );
-                        }
-                    });
-            });
-            ui.add(
-                egui::Slider::new(&mut self.particle_forge.topology_morph, 0.0..=1.0)
-                    .text("Topology morph"),
-            );
-            for (axis, label) in ["Spin X", "Spin Y", "Spin Z"].into_iter().enumerate() {
-                ui.add(
-                    egui::Slider::new(&mut self.particle_forge.spin[axis], -1.5..=1.5).text(label),
-                );
-            }
-            ui.add(egui::Slider::new(&mut self.particle_forge.twist, 0.0..=2.0).text("Twist"));
-            ui.add(
-                egui::Slider::new(&mut self.particle_forge.precession, 0.0..=1.0)
-                    .text("Precession"),
-            );
-            ui.checkbox(&mut self.particle_forge.reverse, "Reverse direction");
-            ui.checkbox(&mut self.particle_forge.auto_camera, "Automatic camera");
-            gradient_value_control(
-                ui,
-                "Gradient shift",
-                &mut self.particle_forge.gradient_shift,
-                0.0,
-                1.0,
-                self.colors.bass,
-                self.colors.treble,
-            );
-            ui.separator();
-            ui.label("Material families");
-            ui.add(
-                egui::Slider::new(&mut self.particle_forge.materials.energy, 0.0..=1.0)
-                    .text("Energy"),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.particle_forge.materials.cyber, 0.0..=1.0)
-                    .text("Cyber"),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.particle_forge.materials.cosmic, 0.0..=1.0)
-                    .text("Cosmic"),
-            );
-            if self.particle_forge.source != ForgeSceneSource::Procedural
-                && self.particle_forge.model.is_none()
-            {
-                ui.label("Drop a bounded `.glb` model to activate this source.");
-            }
-            if let Some(notice) = &self.particle_forge.model_notice {
-                ui.label(
-                    egui::RichText::new(notice)
-                        .small()
-                        .color(Color32::from_rgb(145, 190, 170)),
-                );
-            }
+                    }
+                });
         }
     }
 
     fn draw_mode_panel(&mut self, ctx: &egui::Context) {
         let mut open = self.mode_panel;
-        egui::Window::new("MODE CONTROLS")
+        let title = format!("MODE CONTROLS · {}", self.active_mode_title());
+        egui::Window::new(title)
             .id(egui::Id::new("mode-panel"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -20.0])
-            .default_width(340.0)
+            .default_width(360.0)
+            .min_width(300.0)
+            .max_width(480.0)
             .resizable(true)
+            .vscroll(true)
             .open(&mut open)
             .show(ctx, |ui| self.draw_mode_controls(ui));
         self.mode_panel = open;
@@ -6283,19 +7912,7 @@ impl VisualizerApp {
                     _ => "host.visual-canvas",
                 };
                 let profile = instrument_profile(mode_id);
-                let mode_name = match self.visual {
-                    0 => "Neon Scope".to_owned(),
-                    1 => "Particle Forge".to_owned(),
-                    2 => active_id
-                        .as_deref()
-                        .and_then(|id| self.presets.iter().find(|preset| preset.id == id))
-                        .map_or_else(
-                            || "No valid preset".to_owned(),
-                            |preset| preset.name.clone(),
-                        ),
-                    3 => "Living Photograph".to_owned(),
-                    _ => "Visual Canvas".to_owned(),
-                };
+                let mode_name = self.active_mode_title();
                 let accent =
                     Color32::from_rgb(profile.accent[0], profile.accent[1], profile.accent[2]);
                 egui::Frame::new()
@@ -6410,33 +8027,40 @@ impl VisualizerApp {
                 });
                 ui.label(
                     egui::RichText::new(profile.gesture)
-                    .small()
-                    .color(accent),
+                        .small()
+                        .color(accent),
                 );
-
-                if self.visual == 3 {
-                    self.draw_studio_controls(ui);
-                } else if self.visual == 4 {
-                    self.draw_canvas_controls(ui);
-                } else {
-                    egui::CollapsingHeader::new(format!(
-                        "{} CONTROLS",
-                        profile.family.to_uppercase()
-                    ))
-                    .id_salt(("instrument-mode-controls", mode_id))
-                    .default_open(true)
-                    .show(ui, |ui| self.draw_mode_controls(ui));
-                }
+                ui.label(
+                    egui::RichText::new(
+                        "Mode-specific sliders live in Mode Controls [O]. This panel keeps \
+                         universal tools and user additions (zones, colors, camera, scenes).",
+                    )
+                    .small()
+                    .color(Color32::from_rgb(145, 170, 190)),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(
+                            egui::RichText::new(format!("Open Mode Controls · {mode_name}"))
+                                .strong(),
+                        )
+                        .clicked()
+                    {
+                        self.mode_panel = true;
+                    }
+                });
 
                 if self.visual == 3 {
                     ui.label(
                         egui::RichText::new(
-                            "Studio compositions are session-only in this prototype.",
+                            "Studio layer stack is edited in Mode Controls [O]. Scenes for host \
+                             modes remain session-focused in this prototype.",
                         )
                         .small()
                         .color(Color32::from_rgb(125, 150, 170)),
                     );
-                } else {
+                }
+                {
                 let mut save_scene = false;
                 let mut refresh_scenes = false;
                 let mut restore_selected_scene = false;
@@ -6892,6 +8516,114 @@ impl VisualizerApp {
                 .id_salt("instrument-zones")
                 .default_open(true)
                 .show(ui, |ui| {
+                    let placing = self.interaction.zone_tool == ZonePlaceTool::Place;
+                    if placing {
+                        ui.colored_label(
+                            Color32::from_rgb(90, 245, 220),
+                            format!(
+                                "Place tool · {} · {} — click the visual (Esc cancels)",
+                                self.interaction.place_kind.label(),
+                                self.interaction.place_band.label()
+                            ),
+                        );
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    }
+
+                    // Palette: pick type, then click the visual to place.
+                    egui::CollapsingHeader::new("Zone palette · add by click")
+                        .id_salt("zone-palette")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "1) Choose type & band  ·  2) Click Add / type tile  ·  3) Click the visual",
+                                )
+                                .small()
+                                .color(Color32::from_rgb(145, 170, 190)),
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label("Band");
+                                for band in [
+                                    ZoneBand::Full,
+                                    ZoneBand::Low,
+                                    ZoneBand::Mid,
+                                    ZoneBand::High,
+                                ] {
+                                    if ui
+                                        .selectable_label(
+                                            self.interaction.place_band == band,
+                                            band.label(),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.interaction.place_band = band;
+                                    }
+                                }
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                for kind in ZoneVisualKind::ALL {
+                                    let selected = placing
+                                        && self.interaction.place_kind == kind;
+                                    if ui
+                                        .selectable_label(selected, kind.label())
+                                        .on_hover_text(format!(
+                                            "Place a {} zone by clicking the visual",
+                                            kind.label()
+                                        ))
+                                        .clicked()
+                                    {
+                                        if placing && self.interaction.place_kind == kind {
+                                            self.interaction.cancel_place_zone();
+                                        } else {
+                                            self.interaction.begin_place_zone(kind);
+                                            self.scene_notice = Some(format!(
+                                                "Place {} — click the visual",
+                                                kind.label()
+                                            ));
+                                        }
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                let can_add = self.interaction.zones.len() < MAX_SOUND_ZONES;
+                                if ui
+                                    .add_enabled(
+                                        can_add,
+                                        egui::Button::new(if placing {
+                                            "Cancel place"
+                                        } else {
+                                            "Add zone (place tool)"
+                                        }),
+                                    )
+                                    .clicked()
+                                {
+                                    if placing {
+                                        self.interaction.cancel_place_zone();
+                                    } else {
+                                        self.interaction
+                                            .begin_place_zone(self.interaction.place_kind);
+                                        self.scene_notice = Some(format!(
+                                            "Place {} — click the visual",
+                                            self.interaction.place_kind.label()
+                                        ));
+                                    }
+                                }
+                                if placing
+                                    && ui.small_button("Place at center").clicked()
+                                {
+                                    let kind = self.interaction.place_kind;
+                                    let band = self.interaction.place_band;
+                                    self.interaction.add_zone_of_kind(
+                                        Vec2::new(0.5, 0.5),
+                                        kind,
+                                        band,
+                                    );
+                                    self.scene_notice =
+                                        Some(format!("Placed zone · {}", kind.label()));
+                                }
+                            });
+                        });
+
                     let mut select = None;
                     ui.horizontal_wrapped(|ui| {
                         for (index, zone) in self.interaction.zones.iter().enumerate() {
@@ -6916,17 +8648,9 @@ impl VisualizerApp {
                     });
                     if let Some(index) = select {
                         self.interaction.selected = Some(index);
+                        self.interaction.cancel_place_zone();
                     }
                     ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                self.interaction.zones.len() < MAX_SOUND_ZONES,
-                                egui::Button::new("Add zone"),
-                            )
-                            .clicked()
-                        {
-                            self.interaction.add_zone(Vec2::new(0.5, 0.5));
-                        }
                         if ui.button("Reset zones").clicked() {
                             self.reset_interaction();
                         }
@@ -7311,6 +9035,7 @@ impl eframe::App for VisualizerApp {
             }
         }
         self.update_features();
+        let dt = (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1);
         if self.visual == 2
             && self
                 .gpu_preset
@@ -7320,7 +9045,7 @@ impl eframe::App for VisualizerApp {
             self.event_horizon.ensure_loaded(ctx, &asset_directory());
             self.event_horizon.update(
                 ctx,
-                (self.frame_stats.current_ms as f32 / 1_000.0).clamp(0.0, 0.1),
+                dt,
                 [
                     self.features.low,
                     self.features.mid,
@@ -7330,6 +9055,20 @@ impl eframe::App for VisualizerApp {
                     self.features.transient,
                 ],
                 &self.mode_parameters,
+            );
+        }
+        if self.visual == 2
+            && self
+                .gpu_preset
+                .as_ref()
+                .is_some_and(|renderer| renderer.active_id() == VALLEY_FLIGHT_ID)
+        {
+            self.valley_phrase.update(
+                dt,
+                self.features.onset,
+                self.features.transient,
+                self.features.rms,
+                self.features.low,
             );
         }
         let macro_values = self.performance.update_macros(
@@ -7401,6 +9140,12 @@ impl eframe::App for VisualizerApp {
             self.draw_canvas_handles(&ui.painter_at(rect), rect);
         } else {
             self.draw_zone_handles(&ui.painter_at(rect), rect);
+            if let Some(pointer) = response.hover_pos() {
+                self.draw_zone_place_preview(&ui.painter_at(rect), rect, pointer);
+            }
+        }
+        if self.interaction.zone_tool == ZonePlaceTool::Place {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         if self.performance.blackout {
             ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
@@ -7681,7 +9426,8 @@ fn preset_category(id: &str) -> &'static str {
         "thevisualizer.neon-horizon"
         | "thevisualizer.feedback-tunnel"
         | "thevisualizer.data-storm"
-        | "thevisualizer.quantum-lattice" => "Cyber",
+        | "thevisualizer.quantum-lattice"
+        | "thevisualizer.pixel-valley-flight" => "Cyber",
         "thevisualizer.gravity-wells" | "thevisualizer.event-horizon" => "Cosmic",
         "thevisualizer.solar-bloom"
         | "thevisualizer.aurora-flow"
@@ -7748,25 +9494,25 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
         "host.neon-scope" => InstrumentProfile {
             family: "Waveform",
             tagline: "Layered oscilloscope trails turn amplitude and timing into luminous calligraphy.",
-            gesture: "Canvas · drag to steer the trail field · wheel changes depth · right-drag tunes response and glow",
+            gesture: "↑/↓ cycle 10 scopes · Mode [O] · style + trail controls · Instrument [I] for zones/colors",
             accent: [60, 245, 220],
         },
         "host.particle-forge" => InstrumentProfile {
             family: "3D Force Field",
             tagline: "GPU particles orbit, emit, repel, and vortex through a playable three-dimensional forge.",
-            gesture: "Canvas · drag a node to move it · empty-space drag orbits · Shift+wheel moves depth · right-drag tunes force",
+            gesture: "↑/↓ cycle 10 particle looks · Mode [O] · topology/materials · Forge [F] for nodes",
             accent: [255, 90, 40],
         },
         "host.performance-studio" => InstrumentProfile {
             family: "Layer Studio",
             tagline: "Images, motion, presets, waveforms, and particles combine as one reactive composition.",
-            gesture: "Canvas · right-click toggles the selected layer · right-drag changes scale and reactivity · drag frames the image",
+            gesture: "Mode [O] · Studio layers, media, motion, and blend · Instrument [I] for zones and colors",
             accent: [100, 220, 160],
         },
         "host.visual-canvas" => InstrumentProfile {
             family: "Draw Studio",
             tagline: "Freehand strokes become selectable audio-reactive forms over any Visual Library source.",
-            gesture: "Canvas · draw with Brush/Pen/Shapes · select and drag forms · right-click opens form, visual, audio, and layer actions",
+            gesture: "Mode [O] · tools, layers, form appearance · Instrument [I] for zones, colors, and scenes",
             accent: [120, 255, 225],
         },
         "thevisualizer.aurora-flow" => InstrumentProfile {
@@ -7829,6 +9575,12 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
             gesture: "Canvas · drag rolls the liquid surface · wheel changes blob scale · zones pull the fluid into new masses",
             accent: [190, 225, 255],
         },
+        "thevisualizer.pixel-valley-flight" => InstrumentProfile {
+            family: "Hyperreal Flight",
+            tagline: "Rear chase-cam: plane holds left for counts 1–4, right for 1–4, through a 3D textured valley.",
+            gesture: "Mode [O] · phrase width, bank, chase distance, objects, traffic · plane follows musical 4-count sides",
+            accent: [120, 175, 220],
+        },
         "thevisualizer.neon-horizon" => InstrumentProfile {
             family: "Synthwave Horizon",
             tagline: "A reactive sun, skyline, and perspective grid turn the spectrum into a night drive.",
@@ -7867,62 +9619,62 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
         },
         "thevisualizer.pulse-trace" => InstrumentProfile {
             family: "Layered Signal",
-            tagline: "Stacked waveform echoes drift into luminous green signal calligraphy.",
-            gesture: "Instrument · shape amplitude, echo layers, drift, scan, grid, afterglow, and exposure",
+            tagline: "Reference green phosphor oscilloscope: stacked luminous traces, vertical bloom, and dense ghost echoes on pure black.",
+            gesture: "Mode [O] · amplitude, echo layers, core width, vertical bloom, drift, scan, afterglow",
             accent: [45, 255, 145],
         },
         "thevisualizer.spectrum-skyline" => InstrumentProfile {
             family: "Spectrum Metropolis",
-            tagline: "Frequency towers, animated windows, traffic, haze, and reflections build a neon city.",
-            gesture: "Instrument · shape tower count, height, windows, reflections, haze, traffic, and edge glow",
+            tagline: "Reference LED equalizer skyline: segmented blue-to-magenta towers, mirrored floor, and starfield particles.",
+            gesture: "Mode [O] · bar count, height, LED segments, gap, reflection, starfield, beat pulse",
             accent: [30, 225, 255],
         },
         "thevisualizer.radial-burst" => InstrumentProfile {
             family: "Radial Spectrum",
-            tagline: "A dark reactive core launches individually frequency-driven rays through a spectral corona.",
-            gesture: "Instrument · shape core radius, spoke count, ray length, rotation, wobble, and bloom",
+            tagline: "Reference radial circular equalizer: magenta-blue spoke LEDs around a dark core with lightning wisps.",
+            gesture: "Mode [O] · core radius, spokes, ray length, segments, rotation, bloom, lightning",
             accent: [175, 80, 255],
         },
         "thevisualizer.spectrogram-city" => InstrumentProfile {
             family: "Thermal History City",
-            tagline: "Scrolling spectrum history rises into a false-color city of frequency relief.",
-            gesture: "Instrument · shape history depth, relief, block density, perspective, contours, and fog",
+            tagline: "Reference thermal spectrogram city: red-hot base rising through yellow-green-cyan-blue frequency towers.",
+            gesture: "Mode [O] · history depth, column height, density, thermal contrast, scan texture, base glow",
             accent: [255, 85, 35],
         },
         "thevisualizer.spectral-terrain" => InstrumentProfile {
             family: "Spectrum Surface",
-            tagline: "Audio history becomes a deep luminous landscape with flying contours and elevation color.",
-            gesture: "Instrument · shape peak height, terrain rows, grid columns, flight, wireframe, and distance fog",
+            tagline: "Reference blue spectral mountains: soft luminous ridges fading cyan into the distance.",
+            gesture: "Mode [O] · peak height, depth rows, ridge columns, pitch, scroll, mesh, volume fill",
             accent: [70, 190, 255],
         },
         "thevisualizer.wave-tunnel" => InstrumentProfile {
             family: "Waveform Tunnel",
-            tagline: "The live waveform warps a glowing ember tunnel accelerating around the listener.",
-            gesture: "Instrument · shape ring density, ribs, wave warp, flight, roll, aperture, and tube glow",
+            tagline: "Reference ember wave tunnel: concentric waveform rings racing to a hot vanishing point.",
+            gesture: "Mode [O] · rings, wave warp, flight speed, aperture, radial rays, ember heat, roll",
             accent: [255, 105, 35],
         },
         "thevisualizer.particle-ocean" => InstrumentProfile {
             family: "Particle Current",
-            tagline: "A perspective ocean of points, links, and sparks flows across the spectrum.",
-            gesture: "Instrument · shape particle density, wave height, current, depth, drift, links, and sparkle",
+            tagline: "Reference particle fountain ocean: blue-violet point fields, spirals, and a rising audio plume.",
+            gesture: "Mode [O] · density, wave height, swirl, fountain, flow, trails, core spark",
             accent: [90, 95, 255],
         },
         "thevisualizer.wireframe-terrain" => InstrumentProfile {
             family: "Wireframe Landscape",
-            tagline: "Spectrum history deforms a cyan-green perspective grid into a flying digital mountain range.",
-            gesture: "Instrument · shape grid rows, columns, elevation, perspective, flight, width, and horizon glow",
+            tagline: "Reference green-cyan wire mesh: perspective grid mountains driven by spectrum history.",
+            gesture: "Mode [O] · rows, columns, elevation, perspective, flight, line width, green-cyan mix",
             accent: [40, 255, 190],
         },
         "thevisualizer.halo-spectrum" => InstrumentProfile {
             family: "Chromatic Halo",
-            tagline: "A circular spectrum, central waveform, and reflected light form one radiant audio emblem.",
-            gesture: "Instrument · shape halo radius, bars, length, waveform, rotation, reflection, and bloom",
+            tagline: "Reference composite halo: rainbow ring, center waveform, side EQ towers, and floor mirror.",
+            gesture: "Mode [O] · halo radius, outer bars, waveform gain, side EQ, reflection, rainbow spread",
             accent: [255, 70, 210],
         },
         "thevisualizer.atomic-orbits" => InstrumentProfile {
             family: "Atomic Light Field",
-            tagline: "Audio-driven elliptical light trails and electrons precess around a transient nucleus.",
-            gesture: "Instrument · shape orbit count, size, eccentricity, spin, precession, electrons, and trails",
+            tagline: "Reference atomic light: multi-trail elliptical orbits and electrons around a bright nucleus.",
+            gesture: "Mode [O] · orbit count, size, eccentricity, spin, precession, trail layers, nucleus",
             accent: [110, 195, 255],
         },
         "thevisualizer.cityscape" => InstrumentProfile {
@@ -8070,7 +9822,7 @@ mod tests {
             "host.visual-canvas".to_owned(),
         ];
         ids.extend(bundled.presets.into_iter().map(|preset| preset.id));
-        assert_eq!(ids.len(), 39);
+        assert_eq!(ids.len(), 40);
 
         let mut taglines = std::collections::HashSet::new();
         for id in ids {
