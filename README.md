@@ -57,8 +57,8 @@ This is not a signed public release. See [Windows Packaging](docs/PACKAGING.md).
 
 ## Remaining v0.1 work
 
-- Land the development branch into protected `main` (public `main` is still an empty initialize commit)
-- Expanded portable package smoke and clean-machine validation
+- Fresh-extract live capture/visual acceptance and clean-machine package validation
+- Keep follow-up work on reviewed branches (public `main` restored via PR #1)
 - Device-loss, mixed-DPI, multi-monitor, and broader GPU validation
 - Externally measured playback-to-display latency
 - Public-release validation

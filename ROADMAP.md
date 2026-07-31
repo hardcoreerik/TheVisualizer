@@ -13,12 +13,10 @@ This document is the authority for milestone status. A milestone is complete onl
 | 7. MilkDrop/projectM compatibility | Research only | Format, rendering, licensing, and maintenance options produce a recorded implement/defer decision |
 | 8. Standalone embedded visualizers | Deferred until after v0.1 | Exact target hardware independently captures audio and renders a bounded visual demo |
 
-## Public repository state (2026-07-30)
+## Public repository state (2026-07-31)
 
 - Public remote: `https://github.com/hardcoreerik/TheVisualizer` (public).
-- `origin/main` remains the empty initialize commit `be7a8e0` (zero files). It is **not** a usable public source tree until PR merge.
-- All implemented code and docs live on `docs/project-foundation` (tip includes Event Horizon motion and doc truth-sync).
-- Open PR: [#1 Land Windows v0.1 development baseline on main](https://github.com/hardcoreerik/TheVisualizer/pull/1). Not merged.
+- PR [#1](https://github.com/hardcoreerik/TheVisualizer/pull/1) merged as `42a0467`; `origin/main` now holds the Windows v0.1 development baseline (no longer an empty initialize commit).
 - Expanded portable package smoke on the development host passed 492/492 checksums and launched (see Project Truth). Clean-machine validation remains open.
 
 ## Milestone 1 — Documentation and feasibility — Complete
@@ -78,7 +76,7 @@ Remaining visual/performance acceptance for expanded modes is tracked under Mile
 
 Required for exit (see also [v0.1 Scope](docs/V0.1_SCOPE.md)):
 
-1. **Public source truth:** merge PR #1 so protected `main` is no longer empty (review + explicit merge approval).
+1. **Public source truth:** ~~PR #1 merged~~ (`42a0467`); keep `main` protected and land further work via review branches.
 2. **Expanded package smoke:** development-host archive + 492 checksums + launch recorded 2026-07-30; still need a fresh-extract live capture and representative visual pass, then clean-machine validation.
 3. **Clean-machine package validation:** first run, source selection, device loss/recovery, fullscreen exit, folder uninstall on a separate Windows machine.
 4. **Hardware breadth:** integrated or second GPU where available; mixed-DPI / multi-monitor when hardware exists.
