@@ -1,0 +1,9 @@
+format=1
+id=thevisualizer.onset-architect
+name=Onset Architect
+version=0.1.0
+author=TheVisualizer
+license=Apache-2.0
+abi=2
+platform=windows-x86_64
+library=../target/debug/thevisualizer_creative_suite_plugin.dll

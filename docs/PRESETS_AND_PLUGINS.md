@@ -47,7 +47,7 @@ The host supplies a versioned, size-tagged read-only snapshot containing time, f
 
 Each ABI-v2 command contains a target, index, Set/Add/Multiply operation, and finite value. The host validates the 24-command limit and clamps every target to its existing safe range before applying response, active-mode parameters, color motion/materials, camera, Zone Studio, Particle Forge, Performance Studio, or macros. Beat and deck-take events use a separate bounded bit field. The plugin still receives no direct `wgpu`, Direct3D, Vulkan, Metal, native-window, capture-device, audio-buffer, or frame-lifecycle ownership.
 
-The bundled Creative Suite uses one shared DLL and eight strict manifests:
+The bundled Creative Suite uses one shared DLL and eighteen strict manifests:
 
 | Plugin | Host-owned behavior |
 | --- | --- |
@@ -59,6 +59,16 @@ The bundled Creative Suite uses one shared DLL and eight strict manifests:
 | Transition DJ | Performance crossfader, transition, softness, and deck takes |
 | MIDI Performance Mapper | eight external lanes to Performance macros 1–8 |
 | Ambient Auto-Director | coordinated color, camera, zone, glow, and Forge motion |
+| Analog Fractal Pilot | Fractal Reef dive/path/waveform-formation parameters and response |
+| Spectrum Sculptor | color motion plus palette band/speed mode parameters |
+| Onset Architect | zone placement, Forge topology kicks, and glow on onsets |
+| Silence Gardener | softens response/glow and travel when quiet persists |
+| Macro Weaver | maps bands, RMS, peak, transient, and beat into macros 1–8 |
+| Stereo Navigator | camera yaw/pitch/zoom from band imbalance |
+| Pulse Drummer | zone strength and response punches on beats |
+| Color Storm | aggressive hue/phase/saturation storms |
+| Deck Juggler | Performance crossfader, transition, and deck takes |
+| Ambient Orbit | slow camera/zone/color orbit with gentle travel speed |
 
 One native plugin is active at a time. This avoids ordering conflicts and preserves a clear approval identity; simultaneous plugin chains remain deferred.
 

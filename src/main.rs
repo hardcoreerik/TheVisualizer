@@ -7806,9 +7806,9 @@ fn instrument_profile(id: &str) -> InstrumentProfile {
             accent: [190, 70, 255],
         },
         "thevisualizer.fractal-reef" => InstrumentProfile {
-            family: "Mandelbrot Reef",
-            tagline: "A continuously evolving Mandelbrot field zooms through coral-like boundaries while beats punch, rotate, and recolor its geometry.",
-            gesture: "Canvas · drag steers the camera · wheel changes base scale · set Zoom Direction below to travel inward, outward, or hold",
+            family: "Analog Mandelbrot Journey",
+            tagline: "Music conducts a waypoint dive through Mandelbrot corridors; the live waveform forces each iteration so the set is formed by analog rhythm.",
+            gesture: "Canvas · drag steers view · wheel changes outer scale · raise Waveform Formation and Path Follow · pair with Analog Fractal Pilot plugin",
             accent: [30, 235, 175],
         },
         "thevisualizer.gravity-wells" => InstrumentProfile {

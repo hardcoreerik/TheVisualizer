@@ -1,6 +1,6 @@
 # Project Truth
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 This document records verified project state. Planned behavior belongs in the [Roadmap](ROADMAP.md) and design documents, not in this file.
 
@@ -82,7 +82,8 @@ This document records verified project state. Planned behavior belongs in the [R
 - Shared size-tagged native-plugin ABI v1 and v2 definitions with a matching C header. ABI v1 retains its response-only contract. ABI v2 accepts onset, transient, ten macro values, and eight external controller lanes and emits at most 24 finite commands plus bounded beat/take events.
 - Strict `.tvplugin` manifest discovery for the current platform without loading native code.
 - SHA-256 artifact identity displayed before approval and recomputed immediately before library loading. Approval is explicit and lasts only for the current run.
-- One repository-owned ABI-v1 Windows example plugin plus eight ABI-v2 Creative Suite profiles backed by one shared DLL: Beat Choreographer, Spectral Colorist, Zone Dancer, Camera Pilot, Particle Conductor, Transition DJ, MIDI Performance Mapper, and Ambient Auto-Director.
+- One repository-owned ABI-v1 Windows example plugin plus eighteen ABI-v2 Creative Suite profiles backed by one shared DLL: the original eight (Beat Choreographer, Spectral Colorist, Zone Dancer, Camera Pilot, Particle Conductor, Transition DJ, MIDI Performance Mapper, Ambient Auto-Director) plus Analog Fractal Pilot, Spectrum Sculptor, Onset Architect, Silence Gardener, Macro Weaver, Stereo Navigator, Pulse Drummer, Color Storm, Deck Juggler, and Ambient Orbit.
+- Fractal Reef 0.3 is an analog-rhythm Mandelbrot journey: music-gated dive cycles, six Mandelbrot waypoints, waveform-forced iterations, spectrum-sculpted constants, and a visible complex-plane scope trace. Automated WGSL validation passes; live musical acceptance remains open.
 - ABI-v2 commands route only through host-owned bounded setters for response, active-mode parameters, colors, camera, Zone Studio, Particle Forge, Performance Studio, and macros. MIDI CC 20–27 and localhost OSC plugin-input addresses supply eight external lanes. Only one native plugin is active at a time.
 - An optional `THEVISUALIZER_PLUGINS` directory override for focused discovery and packaging checks.
 - A guarded Windows x86_64 packaging script that builds the locked release workspace and stages a portable local-test archive under `dist`.
