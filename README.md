@@ -96,3 +96,9 @@ Performance Studio can receive MIDI CC/note mappings and localhost OSC messages 
 ## License
 
 TheVisualizer's original code, documentation, original WGSL presets, plugin SDK, ABI-v1 example plugin, and ABI-v2 Creative Suite are licensed under the [Apache License 2.0](LICENSE). Eight modified ISF adaptations are MIT-licensed with pinned artifact-level provenance; see [ISF Imports](docs/ISF_IMPORTS.md). No MilkDrop/projectM code or unlabeled community presets are included. Future compatibility assets require explicit provenance; see [Licensing](docs/LICENSING.md).
+
+## Support development
+
+If this project is useful to you, consider supporting its development. Across ORC projects, support helps fund development time, hardware testing, receiver compatibility, and decoder work.
+
+[GitHub Sponsors](https://github.com/sponsors/hardcoreerik) · [Ko-fi](https://ko-fi.com/hardcoreerik) · [PayPal](https://paypal.me/hardcoreerik)
